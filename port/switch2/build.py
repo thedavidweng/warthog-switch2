@@ -250,9 +250,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     )
     objects = []
     for source in sorted((HOST_DIR).glob("*.c")):
-        if source.name == "nx2_platform.c" or source.name in {
+        if source.name in {
             "switch2_tls.c", "switch2_net.c", "switch2_headless_platform.c", "switch2_sdl_headless.c",
-            "switch2_posix_compat.c"
+            "switch2_posix_compat.c", "headless_engine.c"
         }:
             continue
         obj = BUILD / "host" / (source.name + ".o")
@@ -292,7 +292,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                  f"{' '.join(str(obj) for obj in objects)} -Wl,--start-group "
                  f"{game_archive} {platform_archive} -Wl,--end-group {library_paths} "
                  + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
-                 + " -lstdc++ -Wl,-Map,$out.map"),
+                 + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
+                 " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
+                 " -Wl,--wrap=hidInitializeTouchScreen -lstdc++ -Wl,-Map,$out.map"),
         description="SWITCH2 ENGINE LINK $out",
     )
     n.build(outputs=elf, rule="switch2_engine_link", inputs=[*objects, game_archive, platform_archive])

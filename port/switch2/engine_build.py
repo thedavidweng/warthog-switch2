@@ -197,6 +197,13 @@ def platform_objects(n, port, build, code_flags, includes, release):
     n.build(bridge_rewritten, "switch2_lp64", bridge,
             implicit=["tools/switch2_lp64_rewrite.py", game / "tools/lp64_rewrite.py"])
     add(bridge_rewritten, platform, Path("bridge/switch2_headless_platform.c"))
+    runner = port.root / "host/headless_engine.c"
+    runner_rewritten = build / "lp64/headless_engine.c"
+    n.build(runner_rewritten, "switch2_lp64", runner,
+            implicit=["tools/switch2_lp64_rewrite.py", game / "tools/lp64_rewrite.py"])
+    runner_flags = platform.replace("-DHALO_LINUX_PLATFORM_LAYER", "")
+    add(runner_rewritten, f"{runner_flags} -I{rewritten / 'source/math'}",
+        Path("bridge/headless_engine.c"))
     for name, extra in (("switch2_tls.c", tls), ("switch2_net.c", ""), ("switch2_sdl_headless.c", ""),
                         ("switch2_posix_compat.c", "")):
         add(port.root / "host" / name, f"{extra} {native}", Path("bridge") / name)

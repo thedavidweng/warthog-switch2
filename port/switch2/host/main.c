@@ -30,6 +30,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include <uam2rt.h>
 
 #include "warthog_log.h"
+#include "headless_engine.h"
 
 /* What port/switch2/build.py generates from UPSTREAM.json: the build's
 flavor and version and the pins it was made from, so a log from a console
@@ -223,6 +224,8 @@ int main(int argc, char **argv)
 	}
 	if (gpu_test)
 		warthog_dk_debug_callback(NULL, "self-test", DkResult_Fail, "deliberate GPU diagnostic");
+	if (!cpu_test && !gpu_test)
+		warthog_log("INFO", "headless engine status: %d", warthog_headless_engine_run());
 	warthog_log("INFO", "startup complete; returning to the homebrew menu");
 	/* before the screen, which is what a player sees if the sync failed */
 	warthog_log_sync();
