@@ -157,7 +157,7 @@ def platform_objects(n, port, build, code_flags, includes, release):
            " -fwrapv -fno-delete-null-pointer-checks -fno-omit-frame-pointer -ffp-contract=off")
     warnings = " ".join(f"-Werror={w}" for w in ("incompatible-pointer-types", "int-to-pointer-cast",
                         "pointer-to-int-cast", "int-conversion", "implicit-function-declaration", "format"))
-    platform = " ".join([base, abi, warnings, "-Wno-error=format-truncation",
+    platform = " ".join([base, abi, warnings, "-ffunction-sections", "-fdata-sections", "-Wno-error=format-truncation",
         f"-include {rewritten / 'port/linux/include/halo_linux_prefix.h'}",
         f"-include {build / 'platform_msvc_semantics.h'}",
         f"-I{rewritten / 'port/linux/src'}", f"-I{rewritten / 'port/linux/include'}",

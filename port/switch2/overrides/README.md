@@ -12,7 +12,8 @@ word. This can be proposed upstream for GCC AArch64 builds.
 ## port/linux/src/sdl_platform.c
 
 Omits the POSIX signal watchdog on Switch 2, whose Newlib signal API lacks
-the required sigaction fields. This can be proposed upstream for the port.
+the required sigaction fields, and skips OpenGL function loading for the
+Drako3D renderer. This can be proposed upstream for the port.
 
 ## port/linux/src/d3d8_resources.c
 

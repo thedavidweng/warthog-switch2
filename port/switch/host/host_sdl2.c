@@ -45,6 +45,12 @@ Android, each request goes to a thread that has one.
 
 #define HANDLE_COUNT 256
 
+#ifdef __SWITCH2__
+typedef uintptr_t sdl_guest_address;
+#else
+typedef uint32_t sdl_guest_address;
+#endif
+
 enum handle_type
 {
 	_handle_free,
@@ -169,10 +175,15 @@ static char standin_window, standin_context;
 /* the console's screen, which under deko3d stands for the window's size */
 static void standin_window_size(int *width, int *height)
 {
+#ifdef __SWITCH2__
+	*height = (int)host_dk_output_height();
+	*width = *height * 16 / 9;
+#else
 	int docked = appletGetOperationMode() == AppletOperationMode_Console;
 
 	*width = docked ? 1920 : 1280;
 	*height = docked ? 1080 : 720;
+#endif
 }
 
 uint32_t host_sdl_create_window(const char *title, int width, int height, int64_t flags)
@@ -472,7 +483,9 @@ static void frame_statistics(void)
 		const char *setting = getenv("HALO_FPS_LOG");
 
 		interval = setting && *setting ? atof(setting) : 5.0;
+#ifndef __SWITCH2__
 		log_clocks();
+#endif
 	}
 	if (interval <= 0.0)
 		return;
@@ -884,6 +897,10 @@ static struct
 static pthread_mutex_t rumble_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rumble_condition = PTHREAD_COND_INITIALIZER;
 static int rumble_thread_started;
+#ifdef __SWITCH2__
+static int rumble_stop;
+static pthread_t rumble_thread_id;
+#endif
 
 /* the pad's devices for the style its controller has now (count 0: none) */
 static void rumble_ready(int pad)
@@ -973,6 +990,10 @@ static void *rumble_thread(void *unused)
 	{
 		int pad, any = 0;
 
+#ifdef __SWITCH2__
+		if (rumble_stop)
+			break;
+#endif
 		for (pad = 0; pad < RUMBLE_PADS; pad++)
 		{
 			uint32_t low, high;
@@ -990,6 +1011,9 @@ static void *rumble_thread(void *unused)
 		if (!any)
 			pthread_cond_wait(&rumble_condition, &rumble_lock);
 	}
+#ifdef __SWITCH2__
+	pthread_mutex_unlock(&rumble_lock);
+#endif
 	return NULL;
 }
 
@@ -1007,6 +1031,12 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 	pthread_mutex_lock(&rumble_lock);
 	if (!rumble_thread_started)
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&rumble_thread_id, NULL, rumble_thread, NULL) == 0)
+			rumble_thread_started = 1;
+		else
+			host_logf(HOST_LOG_ERROR, "rumble: its thread could not be made");
+#else
 		pthread_t thread;
 
 		rumble_thread_started = 1;
@@ -1014,6 +1044,7 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 			pthread_detach(thread);
 		else
 			host_logf(HOST_LOG_ERROR, "rumble: its thread could not be made");
+#endif
 	}
 	/* (every request the first time, and after that each change; the
 	thread also readies a pad whose controller changed as it sends) */
@@ -1229,8 +1260,8 @@ SDL2 callback copies it out. */
 struct audio_binding
 {
 	uint32_t handle;
-	uint32_t callback;
-	uint32_t userdata;
+	sdl_guest_address callback;
+	sdl_guest_address userdata;
 	SDL_AudioDeviceID device;
 	pthread_mutex_t lock;
 	pthread_cond_t requested;
@@ -1242,6 +1273,42 @@ struct audio_binding
 	int buffer_size;
 };
 
+#ifdef __SWITCH2__
+void host_sdl_quit(void)
+{
+	unsigned int index;
+	pthread_mutex_lock(&rumble_lock);
+	rumble_stop = 1;
+	pthread_cond_signal(&rumble_condition);
+	pthread_mutex_unlock(&rumble_lock);
+	if (rumble_thread_started)
+		pthread_join(rumble_thread_id, NULL);
+	rumble_thread_started = 0;
+	for (index = 1; index < HANDLE_COUNT; index++)
+	{
+		if (handles[index].type == _handle_audio)
+		{
+			struct audio_binding *binding = handles[index].object;
+			SDL_CloseAudioDevice(binding->device);
+			SDL_free(binding->buffer);
+			pthread_mutex_destroy(&binding->lock);
+			pthread_cond_destroy(&binding->requested);
+			pthread_cond_destroy(&binding->done);
+			SDL_free(binding);
+		}
+		else if (handles[index].type == _handle_gamepad)
+			SDL_GameControllerClose(handles[index].object);
+		handles[index].type = _handle_free;
+		handles[index].object = NULL;
+	}
+	for (index = 0; index < RUMBLE_PADS; index++)
+		if (gyro_pads[index].started)
+			hidStopSixAxisSensor(gyro_pads[index].handles[gyro_pads[index].sensor]);
+	SDL_Quit();
+}
+#endif
+
+#ifndef __SWITCH2__
 static void *audio_thread(void *context)
 {
 	struct audio_binding *binding = context;
@@ -1263,6 +1330,7 @@ static void *audio_thread(void *context)
 	}
 	return NULL;
 }
+#endif
 
 /* appends to the binding's buffer; the caller holds its lock */
 static int audio_keep(struct audio_binding *binding, const void *data, int length)
@@ -1293,10 +1361,18 @@ static void SDLCALL audio_callback(void *userdata, Uint8 *stream, int length)
 	if (binding->callback && binding->buffer_length < length)
 	{
 		binding->additional = length - binding->buffer_length;
+#ifdef __SWITCH2__
+		int additional = binding->additional;
+		pthread_mutex_unlock(&binding->lock);
+		((void (*)(void *, void *, int, int))(uintptr_t)binding->callback)(
+			(void *)(uintptr_t)binding->userdata, (void *)(uintptr_t)binding->handle, additional, additional);
+		pthread_mutex_lock(&binding->lock);
+#else
 		binding->pending = 1;
 		pthread_cond_signal(&binding->requested);
 		while (binding->pending)
 			pthread_cond_wait(&binding->done, &binding->lock);
+#endif
 	}
 	copied = binding->buffer_length < length ? binding->buffer_length : length;
 	memcpy(stream, binding->buffer, (size_t)copied);
@@ -1316,7 +1392,7 @@ struct sdl3_audio_spec
 	int32_t freq;
 };
 
-uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, uint32_t callback, uint32_t userdata)
+uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, sdl_guest_address callback, sdl_guest_address userdata)
 {
 	const struct sdl3_audio_spec *guest_spec = spec;
 	struct audio_binding *binding = SDL_calloc(1, sizeof(*binding));
@@ -1377,8 +1453,10 @@ uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, uint32_t 
 		SDL_free(binding);
 		return 0;
 	}
+#ifndef __SWITCH2__
 	if (callback && host_native_thread_create(audio_thread, binding, 256 * 1024) != 0)
 		host_fatal("cannot start the audio thread");
+#endif
 	return binding->handle;
 }
 
@@ -1555,7 +1633,7 @@ int host_sdl_show_simple_message_box(uint32_t flags, const char *title, const ch
 
 /* the texts are guest addresses, as the Android host takes them */
 int host_sdl_show_message_box(uint32_t flags, const char *title, const char *message, int count,
-	const uint32_t *button_flags, const int32_t *button_ids, const uint32_t *button_texts)
+	const uint32_t *button_flags, const int32_t *button_ids, const sdl_guest_address *button_texts)
 {
 	const char *labels[4];
 	char choices[256];

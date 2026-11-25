@@ -2143,6 +2143,7 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 		return FALSE;
 	}
 	SDL_GL_MakeCurrent(platform_window, platform_gl_context);
+#ifndef __SWITCH2__
 	if (!gl_functions_load())
 	{
 #ifndef HALO_ANDROID
@@ -2150,6 +2151,7 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 #endif
 		return FALSE;
 	}
+#endif
 #ifdef XGPU_GL_LEGACY_AT_RUN_TIME
 	if (xgpu_gl_legacy)
 	{
@@ -2185,7 +2187,9 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 #endif
 	(void)version;
 	platform_event_thread = SDL_GetCurrentThreadID();
+#ifndef __SWITCH2__
 	platform_log("OpenGL %s on %s", (const char *)glGetString(GL_VERSION), (const char *)glGetString(GL_RENDERER));
+#endif
 #ifndef HALO_ANDROID
 	platform_mouse_capture(TRUE);
 #endif

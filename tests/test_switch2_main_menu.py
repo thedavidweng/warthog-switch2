@@ -9,6 +9,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class MainMenuLinkTest(unittest.TestCase):
+    def test_main_menu_link_and_audit(self):
+        build = ROOT / "scripts/switch2/build.sh"
+        subprocess.run([str(build), "configure"], cwd=ROOT, check=True, capture_output=True)
+        subprocess.run([str(build), "ninja", "switch2"], cwd=ROOT, check=True, capture_output=True)
+        subprocess.run([str(build), "audit"], cwd=ROOT, check=True, capture_output=True)
+        out = ROOT / "build/switch2"
+        self.assertTrue((out / "warthog.nro").is_file())
+        self.assertTrue((out / "warthog.elf").is_file())
+        linkmap = (out / "warthog.elf.map").read_text()
+        for name in ("libSDL2_host.a", "libdrako3d.a", "libuam2rt.a",
+                     "d3d8_dk.o", "nv2a_vsh_dk.o", "nv2a_psh_dk.o",
+                     "host_dk.c.o", "host_sdl2.c.o", "host_sdl3_events.c.o"):
+            self.assertIn(name, linkmap)
+        for name in ("libEGL.a", "libGLESv2.a", "libglapi.a", "libdrm_nouveau.a",
+                     "/opt/devkitpro/libnx/"):
+            self.assertNotIn(name, linkmap)
+        result = subprocess.run(
+            [str(build), "/opt/devkitpro/devkitA64/bin/aarch64-none-elf-nm",
+             "--defined-only", "build/switch2/warthog.elf"],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        )
+        symbols = {line.split()[-1] for line in result.stdout.splitlines() if line.split()}
+        self.assertTrue({"halo_main", "D3DDevice_Present", "host_dk_submit",
+                         "SDL_OpenAudioDeviceStream", "sdl2_host_SDL_Init"} <= symbols)
+
+
 class RendererAddressTest(unittest.TestCase):
     def test_command_addresses_follow_platform_abi(self):
         guest = ROOT / "port/switch/guest"
