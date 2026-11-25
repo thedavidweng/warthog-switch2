@@ -281,7 +281,8 @@ Permission to use, copy, modify, and/or distribute this software for any purpose
 
 THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE."""]
     lines += ["", f'NaGaa95/dolphin-nx {ref["commit"]}: nx2_platform.{{c,h}} and '
-              "nx2_gameshare.{c,h}: SPDX-License-Identifier: MIT",
+              "nx2_gameshare.{c,h}: SPDX-License-Identifier: MIT; "
+              "Cemu-nx and NaGaa95/dolphin-nx @ 7fb685b353e19a9a5848e9bd658945d1f9cd382a",
               "Mesa (NAK and GLSL compiler): MIT; included in UAM2.",
               "nanosvg: Zlib; included in the upstream Switch port.",
               "libkaihen is the ISC-licensed client library of kaihen.",

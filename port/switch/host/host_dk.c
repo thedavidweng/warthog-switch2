@@ -48,6 +48,8 @@ give.
 #include "../../switch2/host/switch2_splitscreen.h"
 #include "../../switch2/host/switch2_drako3d.h"
 #include "../../switch2/host/switch2_perf.h"
+#include "../../switch2/host/nx2_gameshare.h"
+#include "../../switch2/host/switch2_gameshare.h"
 #endif
 #include <pthread.h>
 #include <stdarg.h>
@@ -196,6 +198,12 @@ static struct
 	/* the swapchain's size (swapchain_make) */
 	uint32_t screen_width, screen_height;
 	DkSwapchain swapchain;
+#ifdef __SWITCH2__
+	DkMemBlock guest_screen_memory;
+	DkImage guest_screen_images[SCREEN_IMAGES];
+	DkSwapchain guest_swapchain;
+	uint32_t guest_screen_width, guest_screen_height;
+#endif
 
 	struct image_block image_blocks[IMAGE_BLOCK_LIMIT];
 	int image_block_count;
@@ -1638,6 +1646,65 @@ static void swapchain_remake(void)
 	host_logf(HOST_LOG_INFO, "deko3d: presenting at %ux%u", (unsigned)dk.screen_width, (unsigned)dk.screen_height);
 }
 
+#ifdef __SWITCH2__
+static int initialize(void);
+
+int host_dk_gameshare_open(void *window, int width, int height)
+{
+	DkSwapchainMaker maker;
+	DkImageLayout layout;
+	DkImage const *images[SCREEN_IMAGES];
+	uint32_t image_size;
+
+	if (!dk.ready && !initialize())
+		return 0;
+	if (dk.guest_swapchain || !window || width <= 0 || height <= 0)
+		return 0;
+	layout_make(&layout, DkImageFormat_RGBA8_Unorm,
+		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine,
+		(uint32_t)width, (uint32_t)height);
+	image_size = (uint32_t)((dkImageLayoutGetSize(&layout) +
+		dkImageLayoutGetAlignment(&layout) - 1) &
+		~(uint64_t)(dkImageLayoutGetAlignment(&layout) - 1));
+	dk.guest_screen_memory = memory_block(SCREEN_IMAGES * image_size,
+		DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, NULL);
+	if (!dk.guest_screen_memory)
+		return 0;
+	for (unsigned i = 0; i < SCREEN_IMAGES; i++) {
+		dkImageInitialize(&dk.guest_screen_images[i], &layout,
+			dk.guest_screen_memory, i * image_size);
+		images[i] = &dk.guest_screen_images[i];
+	}
+	dkSwapchainMakerDefaults(&maker, dk.device, (NWindow *)window,
+		images, SCREEN_IMAGES);
+	dk.guest_swapchain = dkSwapchainCreate(&maker);
+	if (!dk.guest_swapchain) {
+		dkMemBlockDestroy(dk.guest_screen_memory);
+		dk.guest_screen_memory = NULL;
+		return 0;
+	}
+	dk.guest_screen_width = (uint32_t)width;
+	dk.guest_screen_height = (uint32_t)height;
+	host_logf(HOST_LOG_INFO, "deko3d: GameShare guest display at %ux%u",
+		(unsigned)width, (unsigned)height);
+	return 1;
+}
+
+void host_dk_gameshare_close(void)
+{
+	if (!dk.guest_swapchain)
+		return;
+	if (dk.queue)
+		dkQueueWaitIdle(dk.queue);
+	dkSwapchainDestroy(dk.guest_swapchain);
+	dk.guest_swapchain = NULL;
+	if (dk.guest_screen_memory)
+		dkMemBlockDestroy(dk.guest_screen_memory);
+	dk.guest_screen_memory = NULL;
+	dk.guest_screen_width = dk.guest_screen_height = 0;
+}
+#endif
+
 static int initialize(void)
 {
 	DkDeviceMaker device_maker;
@@ -1880,8 +1947,12 @@ static void present(const struct dk_command_present *command)
 	struct trace_event *event = trace_add(DK_COMMAND_PRESENT);
 #ifdef __SWITCH2__
 	uint64_t frame_started_ns = slow_now_ns();
+	switch2_gameshare_update();
 #endif
 	int slot;
+#ifdef __SWITCH2__
+	int guest_slot = -1;
+#endif
 
 	event->a[0] = command->back_buffer.data;
 	event->a[1] = SURFACE_PIXEL_WIDTH(&command->back_buffer) | SURFACE_PIXEL_HEIGHT(&command->back_buffer) << 16;
@@ -1986,6 +2057,30 @@ static void present(const struct dk_command_present *command)
 			screenshot = back_buffer;
 		}
 		dkCmdBufBlitImage(dk.commands, &source, &from, &screen_view, &to, DkBlitFlag_FilterLinear, 0);
+#ifdef __SWITCH2__
+		/* A SeparateViews session gets the same complete player-1 frame on
+		   its named display.  The guest swapchain is uncompressed because
+		   VI2 does not accept Maxwell-style hardware compression. */
+		if (dk.guest_swapchain && nx2GameShareSeparateActive()) {
+			DkImageView guest_view;
+			DkImageView const *guest_views[1] = { &guest_view };
+			DkScissor guest_scissor = { 0, 0, dk.guest_screen_width,
+				dk.guest_screen_height };
+			DkViewport guest_viewport = { 0.0f, 0.0f,
+				(float)dk.guest_screen_width, (float)dk.guest_screen_height,
+				0.0f, 1.0f };
+			guest_slot = dkQueueAcquireImage(dk.queue, dk.guest_swapchain);
+			dkImageViewDefaults(&guest_view,
+				&dk.guest_screen_images[guest_slot]);
+			dkCmdBufBindRenderTargets(dk.commands, guest_views, 1, NULL);
+			dkCmdBufSetViewports(dk.commands, 0, &guest_viewport, 1);
+			dkCmdBufSetScissors(dk.commands, 0, &guest_scissor, 1);
+			DkImageRect guest_to = { 0, 0, 0, dk.guest_screen_width,
+				dk.guest_screen_height, 1 };
+			dkCmdBufBlitImage(dk.commands, &source, &from, &guest_view,
+				&guest_to, DkBlitFlag_FilterLinear, 0);
+		}
+#endif
 	}
 	command_done(event);
 #ifdef __SWITCH2__
@@ -2025,6 +2120,10 @@ static void present(const struct dk_command_present *command)
 		}
 	}
 	dkQueuePresentImage(dk.queue, dk.swapchain, slot);
+#ifdef __SWITCH2__
+	if (guest_slot >= 0)
+		dkQueuePresentImage(dk.queue, dk.guest_swapchain, guest_slot);
+#endif
 	slow.presents++;
 	host_dk_presenting = 1;
 	if (++dk.frames_presented == 1)
@@ -4854,6 +4953,7 @@ void host_dk_shutdown(void)
 	}
 	host_dk_hud_shutdown();
 	if (dk.queue) dkQueueWaitIdle(dk.queue);
+	host_dk_gameshare_close();
 	host_dk_shaders_shutdown();
 	host_dk_compiler_shutdown();
 	if (!dk.device) return;

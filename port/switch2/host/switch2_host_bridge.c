@@ -7,6 +7,7 @@
 #include <switch2/memory/heap.h>
 #include "../../switch/host/host.h"
 #include "nx2_platform.h"
+#include "switch2_gameshare.h"
 #include "warthog_log.h"
 
 int host_renderer_deko3d = 1;
@@ -79,6 +80,7 @@ void switch2_lifecycle_cleanup(void)
 	cleaned = 1;
 	switch2_lifecycle_stop();
 	host_debug_shutdown();
+	switch2_gameshare_shutdown();
 	host_dk_shutdown();
 	host_sdl_quit();
 	switch2PlatformReleaseWindow();

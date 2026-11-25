@@ -33,6 +33,7 @@ Android, each request goes to a thread that has one.
 #include "host_ui.h"
 
 #ifdef __SWITCH2__
+#include "../../switch2/host/switch2_gameshare.h"
 #include "../../switch2/host/switch2_input.h"
 #include "../../switch2/host/switch2_text_nmouse.h"
 static void rumble_stop_pad(int pad);
@@ -1388,6 +1389,9 @@ struct audio_binding
 	unsigned char *buffer;
 	int buffer_length;
 	int buffer_size;
+	int sample_rate;
+	int channels;
+	SDL_AudioFormat format;
 };
 
 #ifdef __SWITCH2__
@@ -1467,6 +1471,11 @@ static int audio_keep(struct audio_binding *binding, const void *data, int lengt
 	}
 	memcpy(binding->buffer + binding->buffer_length, data, (size_t)length);
 	binding->buffer_length += length;
+#ifdef __SWITCH2__
+	if (binding->format == AUDIO_S16SYS && binding->channels == 2)
+		switch2_gameshare_guest_audio(data, (uint32_t)length / 4,
+			(uint32_t)binding->sample_rate);
+#endif
 	return 1;
 }
 
@@ -1561,6 +1570,9 @@ uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, sdl_guest
 		SDL_free(binding);
 		return 0;
 	}
+	binding->sample_rate = obtained.freq;
+	binding->channels = obtained.channels;
+	binding->format = obtained.format;
 	host_logf(HOST_LOG_INFO, "audio %d Hz, %d channels, %d frames a callback", obtained.freq, obtained.channels,
 		obtained.samples);
 	/* the device starts paused, so no callback can run before this */
