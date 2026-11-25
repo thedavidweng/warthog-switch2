@@ -11,11 +11,9 @@ history. `AGENTS.md` describes the process.
 
 ## Open decisions
 
-No record has been written yet. These decisions are named by the spec and must
-be recorded here before the code commits to an answer:
+These decisions are named by the spec and must be recorded before the code
+commits to an answer:
 
-- **ABI model** — Warthog's existing ILP32 guest inside an LP64 host, or the
-  game built natively as LP64. Decided by the capability probe work.
 - **Renderer** — Drako3D with Ampere DKSH compiled by UAM2, keeping OunceVK as
   a documented contingency only.
 - **SDL split** — the existing SDL2 host with an SDL3 guest, or migration to
@@ -23,4 +21,4 @@ be recorded here before the code commits to an answer:
 
 ## Records
 
-None yet.
+- [0001. Use native LP64 for the game](0001-lp64-native-abi.md).
