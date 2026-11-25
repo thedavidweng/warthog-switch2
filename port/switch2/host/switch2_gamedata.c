@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #define _POSIX_C_SOURCE 200809L
 #include "switch2_gamedata.h"
+#include "switch2_custom_edition.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -414,6 +415,13 @@ int switch2_gamedata_prepare_limited(const char *root, const char *legacy, uint6
 	DIR *directory;
 	struct dirent *entry;
 	int maps_present;
+	char ce_message[256];
+
+	if (!switch2_ce_prepare_directory(root, ce_message, sizeof(ce_message)))
+	{
+		snprintf(message, message_size, "%s", ce_message);
+		return SWITCH2_GAMEDATA_IO_ERROR;
+	}
 
 	if (!has_ui(root) && has_ui(legacy) && !migrate(root, legacy))
 	{
@@ -422,6 +430,11 @@ int switch2_gamedata_prepare_limited(const char *root, const char *legacy, uint6
 	}
 	if (has_ui(root))
 	{
+		if (switch2_ce_enumerate(root, legacy, NULL, NULL, ce_message, sizeof(ce_message)) < 0)
+		{
+			snprintf(message, message_size, "%s", ce_message);
+			return SWITCH2_GAMEDATA_INVALID_IMAGE;
+		}
 		snprintf(message, message_size, "Game data found.");
 		return SWITCH2_GAMEDATA_OK;
 	}

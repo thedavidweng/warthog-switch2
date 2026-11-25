@@ -76,8 +76,9 @@ feature-status matrix carrying the same evidence standard as this table.
   computer's `ca-certificates.crt` works too.
 
 **Owning Halo on PC or through the Master Chief Collection is not enough on
-its own.** The port reads Xbox disc data; a PC or MCC installation is not a
-substitute, and MCC map support is not implemented.
+its own.** The port requires retail Xbox Halo: Combat Evolved disc data;
+a PC or MCC installation is not a substitute, and MCC map support is not
+implemented.
 
 ## Installation
 
