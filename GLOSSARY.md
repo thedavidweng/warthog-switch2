@@ -107,8 +107,8 @@ _Avoid_: 32-bit build, the guest (unqualified, when the ABI is the point)
 The 64-bit-pointer AArch64 model devkitA64 and every Switch 2 NRO use. Native
 LP64 means building the game itself that way, which needs no runtime
 executable-memory publication but has to keep the Xbox's data layouts intact
-another way. Both models are candidates until ADR-0001 records the measured
-decision.
+another way. ADR-0001 selects native LP64; the hardware probe remains to be
+run.
 _Avoid_: 64-bit build, native (unqualified)
 
 **Guest**:
