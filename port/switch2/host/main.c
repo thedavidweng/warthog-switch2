@@ -237,6 +237,22 @@ static void log_shader_runtime(void)
 
 extern uintptr_t warthog_engine_symbol_anchor(void);
 
+static void wait_for_menu_return(u64 buttons, const char *prompt)
+{
+	printf("%s\n", prompt);
+	consoleUpdate(NULL);
+	PadState pad;
+	padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+	padInitializeDefault(&pad);
+	while (appletMainLoop())
+	{
+		padUpdate(&pad);
+		if (padGetButtonsDown(&pad) & buttons)
+			break;
+		consoleUpdate(NULL);
+	}
+}
+
 static void extraction_progress(void *ctx, int index, int count, const char *path, uint64_t done, uint64_t total)
 {
 	static int previous;
@@ -297,17 +313,8 @@ int main(int argc, char **argv)
 	{
 		warthog_log_console("ERROR", "Restricted applet mode or insufficient memory. Launch Warthog using title takeover "
 			"(full-memory Application mode) under kaiHEN.");
-		printf("Press + or B to return to the homebrew menu.\n");
-		consoleUpdate(NULL);
-		PadState pad;
-		padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-		padInitializeDefault(&pad);
-		while (appletMainLoop())
-		{
-			padUpdate(&pad);
-			if (padGetButtonsDown(&pad) & (HidNpadButton_Plus | HidNpadButton_B)) break;
-			consoleUpdate(NULL);
-		}
+		wait_for_menu_return(HidNpadButton_Plus | HidNpadButton_B,
+			"Press + or B to return to the homebrew menu.");
 		switch2PlatformRestoreClock();
 		nx2ExitCleanupNow();
 		warthog_log_close();
@@ -389,17 +396,8 @@ int main(int argc, char **argv)
 		}
 		else
 		{
-			printf("Press + to return to the homebrew menu.\n");
-			consoleUpdate(NULL);
-			PadState pad;
-			padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-			padInitializeDefault(&pad);
-			while (appletMainLoop())
-			{
-				padUpdate(&pad);
-				if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
-				consoleUpdate(NULL);
-			}
+			wait_for_menu_return(HidNpadButton_Plus,
+				"Press + to return to the homebrew menu.");
 		}
 	}
 	warthog_log("INFO", "startup complete; returning to the homebrew menu");

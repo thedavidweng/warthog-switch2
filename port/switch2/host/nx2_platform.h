@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 // From NaGaa95/dolphin-nx Source/Core/Common/nx2_platform.h
 // Revision 7fb685b353e19a9a5848e9bd658945d1f9cd382a
+// Copyright (c) NaGaa95/dolphin-nx contributors
 #pragma once
 #include <switch.h>
 #include <stdbool.h>

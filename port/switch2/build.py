@@ -445,7 +445,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     n.build(outputs="switch2-probe-gfx", rule="phony", inputs=[gfx_nro, gfx_elf])
 
     sdl_objects = []
-    for source in (PORT_DIR / "probe" / "sdl_probe.c", HOST_DIR / "nx2_platform.c"):
+    for source in (PORT_DIR / "probe" / "sdl_probe.c", HOST_DIR / "nx2_platform.c",
+                   HOST_DIR / "switch2_display.c"):
         obj = BUILD / "probe" / (source.name + ".o")
         n.build(outputs=obj, rule="switch2_cc", inputs=source,
                 variables={"cflags": f"{code_flags} {includes} -ffunction-sections -fdata-sections"})

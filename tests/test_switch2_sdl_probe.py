@@ -15,6 +15,7 @@ class SDLDecisionTest(unittest.TestCase):
             text = (ROOT / f"port/switch2/host/nx2_platform.{extension}").read_text()
             lines = text.splitlines()
             self.assertTrue(lines[0].startswith("// nx2_platform:"))
+            self.assertIn("Copyright", text)
             self.assertEqual(lines[1], "// SPDX-License-Identifier: MIT")
             self.assertIn("NaGaa95/dolphin-nx", lines[2])
             self.assertIn(f"Source/Core/Common/nx2_platform.{extension}", lines[2])

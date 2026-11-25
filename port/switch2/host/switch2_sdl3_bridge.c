@@ -18,6 +18,9 @@ type that carries no pointer, which covers all the platform layer reads.
 #include <pthread.h>
 #include <SDL3/SDL.h>
 #include "nx2_platform.h"
+#include "nx2_gameshare.h"
+#include "switch2_gameshare.h"
+#include "switch2_input.h"
 #include "switch2_text_nmouse.h"
 
 int host_sdl_init(unsigned int flags);
@@ -67,6 +70,34 @@ static unsigned event_read, event_count;
 
 static AppletHookCookie lifecycle_cookie;
 static bool lifecycle_hooked, lifecycle_exit, lifecycle_quit_sent;
+static struct switch2_controller_slots controller_slots;
+static Nx2GameShareInput gameshare_input;
+static bool gameshare_guest_connected;
+
+#define SWITCH2_GAMESHARE_GAMEPAD_ID 0x47530001u
+
+static void gameshare_poll(void)
+{
+	bool connected;
+	SDL_Event event;
+	unsigned int ids[16];
+	int count = host_sdl_get_gamepads(ids, 16);
+	int wireless[SWITCH2_NPAD_COUNT] = { 0, 0, 0, 0 };
+
+	for (int i = 0; i < count && i < (int)SWITCH2_NPAD_COUNT; i++)
+		wireless[i] = 1;
+	switch2_slots_update(&controller_slots, 0, wireless);
+	switch2_gameshare_update();
+	connected = switch2_gameshare_active();
+	if (connected)
+		(void)switch2_gameshare_guest_input(&gameshare_input);
+	if (connected == gameshare_guest_connected)
+		return;
+	gameshare_guest_connected = connected;
+	event.type = connected ? SDL_EVENT_GAMEPAD_ADDED : SDL_EVENT_GAMEPAD_REMOVED;
+	event.gdevice.which = SWITCH2_GAMESHARE_GAMEPAD_ID;
+	SDL_PushEvent(&event);
+}
 
 static void lifecycle_hook(AppletHookType type, void *unused)
 {
@@ -94,8 +125,10 @@ void switch2_lifecycle_stop(void)
 bool SDL_Init(SDL_InitFlags flags)
 {
 	bool ok = host_sdl_init(flags) != 0;
-	if (ok)
+	if (ok) {
+		switch2_slots_init(&controller_slots);
 		switch2_text_nmouse_start();
+	}
 	return ok;
 }
 
@@ -274,6 +307,7 @@ bool SDL_PollEvent(SDL_Event *event)
 {
 	SDL_Event scratch;
 	switch2_text_nmouse_poll();
+	gameshare_poll();
 	if (!appletMainLoop() && !lifecycle_quit_sent)
 		lifecycle_exit = true;
 	if (lifecycle_exit && !lifecycle_quit_sent) {
@@ -331,20 +365,23 @@ bool SDL_HasGamepad(void)
 {
 	unsigned int ids[16];
 
-	return host_sdl_get_gamepads(ids, 16) > 0;
+	return host_sdl_get_gamepads(ids, 16) > 0 || gameshare_guest_connected;
 }
 
 SDL_JoystickID *SDL_GetGamepads(int *count)
 {
 	unsigned int ids[16];
 	int found = host_sdl_get_gamepads(ids, 16);
-	SDL_JoystickID *result = malloc((found + 1) * sizeof(SDL_JoystickID));
+	SDL_JoystickID *result = malloc((found + (gameshare_guest_connected ? 1 : 0) + 1) *
+		sizeof(SDL_JoystickID));
 	int index;
 
 	if (!result)
 		return NULL;
 	for (index = 0; index < found; index++)
 		result[index] = ids[index];
+	if (gameshare_guest_connected)
+		result[found++] = SWITCH2_GAMESHARE_GAMEPAD_ID;
 	result[found] = 0;
 	if (count)
 		*count = found;
@@ -353,31 +390,74 @@ SDL_JoystickID *SDL_GetGamepads(int *count)
 
 SDL_Gamepad *SDL_OpenGamepad(SDL_JoystickID id)
 {
+	if (id == SWITCH2_GAMESHARE_GAMEPAD_ID)
+		return gameshare_guest_connected ? (SDL_Gamepad *)(uintptr_t)id : NULL;
 	return (SDL_Gamepad *)(uintptr_t)host_sdl_open_gamepad(id);
 }
 
 SDL_Gamepad *SDL_GetGamepadFromID(SDL_JoystickID id)
 {
+	if (id == SWITCH2_GAMESHARE_GAMEPAD_ID)
+		return gameshare_guest_connected ? (SDL_Gamepad *)(uintptr_t)id : NULL;
 	return (SDL_Gamepad *)(uintptr_t)host_sdl_gamepad_from_id(id);
 }
 
 Sint16 SDL_GetGamepadAxis(SDL_Gamepad *gamepad, SDL_GamepadAxis axis)
 {
+	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID) {
+		switch (axis) {
+			case SDL_GAMEPAD_AXIS_LEFTX: return (Sint16)gameshare_input.stick[0];
+			case SDL_GAMEPAD_AXIS_LEFTY: return (Sint16)-gameshare_input.stick[1];
+			case SDL_GAMEPAD_AXIS_RIGHTX: return (Sint16)gameshare_input.stick[2];
+			case SDL_GAMEPAD_AXIS_RIGHTY: return (Sint16)-gameshare_input.stick[3];
+			case SDL_GAMEPAD_AXIS_LEFT_TRIGGER:
+				return (gameshare_input.buttons & HidNpadButton_ZL) ? INT16_MAX : 0;
+			case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER:
+				return (gameshare_input.buttons & HidNpadButton_ZR) ? INT16_MAX : 0;
+			default: return 0;
+		}
+	}
 	return (Sint16)host_sdl_gamepad_axis((unsigned int)(uintptr_t)gamepad, (int)axis);
 }
 
 bool SDL_GetGamepadButton(SDL_Gamepad *gamepad, SDL_GamepadButton button)
 {
+	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID) {
+		static const uint64_t buttons[] = {
+			[SDL_GAMEPAD_BUTTON_SOUTH] = HidNpadButton_B,
+			[SDL_GAMEPAD_BUTTON_EAST] = HidNpadButton_A,
+			[SDL_GAMEPAD_BUTTON_WEST] = HidNpadButton_Y,
+			[SDL_GAMEPAD_BUTTON_NORTH] = HidNpadButton_X,
+			[SDL_GAMEPAD_BUTTON_BACK] = HidNpadButton_Minus,
+			[SDL_GAMEPAD_BUTTON_START] = HidNpadButton_Plus,
+			[SDL_GAMEPAD_BUTTON_LEFT_SHOULDER] = HidNpadButton_L,
+			[SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER] = HidNpadButton_R,
+			[SDL_GAMEPAD_BUTTON_DPAD_UP] = HidNpadButton_Up,
+			[SDL_GAMEPAD_BUTTON_DPAD_DOWN] = HidNpadButton_Down,
+			[SDL_GAMEPAD_BUTTON_DPAD_LEFT] = HidNpadButton_Left,
+			[SDL_GAMEPAD_BUTTON_DPAD_RIGHT] = HidNpadButton_Right,
+		};
+		return button >= 0 && button < (int)(sizeof(buttons) / sizeof(buttons[0])) &&
+			(gameshare_input.buttons & buttons[button]) != 0;
+	}
 	return host_sdl_gamepad_button((unsigned int)(uintptr_t)gamepad, (int)button) != 0;
 }
 
 SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad *gamepad)
 {
+	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID)
+		return SDL_GAMEPAD_TYPE_STANDARD;
 	return (SDL_GamepadType)host_sdl_gamepad_type((unsigned int)(uintptr_t)gamepad);
 }
 
 bool SDL_RumbleGamepad(SDL_Gamepad *gamepad, Uint16 low, Uint16 high, Uint32 milliseconds)
 {
+	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID) {
+		(void)milliseconds;
+		nx2GameShareSetGuestRumble(switch2_rumble_level(low) / 65535.0f,
+			switch2_rumble_level(high) / 65535.0f);
+		return true;
+	}
 	return host_sdl_rumble_gamepad((unsigned int)(uintptr_t)gamepad, low, high, milliseconds) != 0;
 }
 
@@ -435,7 +515,16 @@ bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream)
 }
 
 bool SDL_InitSubSystem(SDL_InitFlags flags) { return host_sdl_init(flags) != 0; }
-void SDL_Quit(void) { host_sdl_quit(); }
+void SDL_Quit(void)
+{
+	unsigned int ids[16];
+	int count = host_sdl_get_gamepads(ids, 16);
+	for (int i = 0; i < count; i++)
+		host_sdl_rumble_gamepad(ids[i], switch2_rumble_level(0), switch2_rumble_level(0), 0);
+	nx2GameShareSetGuestRumble(0.0f, 0.0f);
+	gameshare_guest_connected = false;
+	host_sdl_quit();
+}
 int SDL_strcasecmp(const char *a, const char *b) { return strcasecmp(a, b); }
 Uint64 SDL_GetTicksNS(void)
 {
@@ -517,9 +606,18 @@ bool SDL_PushEvent(SDL_Event *event)
 	pthread_mutex_unlock(&event_lock);
 	return ok;
 }
-const char *SDL_GetGamepadName(SDL_Gamepad *pad) { return host_sdl_gamepad_name((unsigned int)(uintptr_t)pad); }
+const char *SDL_GetGamepadName(SDL_Gamepad *pad)
+{
+	if ((uintptr_t)pad == SWITCH2_GAMESHARE_GAMEPAD_ID)
+		return "GameShare guest";
+	return host_sdl_gamepad_name((unsigned int)(uintptr_t)pad);
+}
 char *SDL_GetGamepadMapping(SDL_Gamepad *pad) { (void)pad; return NULL; }
-void SDL_CloseGamepad(SDL_Gamepad *pad) { host_sdl_close_gamepad((unsigned int)(uintptr_t)pad); }
+void SDL_CloseGamepad(SDL_Gamepad *pad)
+{
+	if ((uintptr_t)pad != SWITCH2_GAMESHARE_GAMEPAD_ID)
+		host_sdl_close_gamepad((unsigned int)(uintptr_t)pad);
+}
 SDL_Keycode SDL_GetKeyFromScancode(SDL_Scancode s, SDL_Keymod m, bool key_event)
 {
 	(void)m; (void)key_event;

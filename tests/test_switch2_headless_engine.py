@@ -96,11 +96,20 @@ class MemoryMappingTest(unittest.TestCase):
             (directory / "switch.h").write_text(
                 "#include <stddef.h>\n"
                 "typedef struct { int unused; } VirtmemReservation;\n"
+                "typedef unsigned long long u64; typedef unsigned u32;\n"
+                "typedef struct { u64 addr; u64 size; u32 type; } MemoryInfo;\n"
+                "#define CUR_PROCESS_HANDLE 0\n"
+                "#define InfoType_StackRegionAddress 1\n"
+                "#define InfoType_StackRegionSize 2\n"
+                "#define MemType_Unmapped 0\n"
                 "#define R_SUCCEEDED(x) ((x) == 0)\n"
+                "#define R_FAILED(x) ((x) != 0)\n"
                 "void virtmemLock(void); void virtmemUnlock(void);\n"
                 "void *virtmemFindStack(size_t, size_t);\n"
                 "VirtmemReservation *virtmemAddReservation(void *, size_t);\n"
                 "void virtmemRemoveReservation(VirtmemReservation *);\n"
+                "int svcGetInfo(u64 *, u32, int, int);\n"
+                "int svcQueryMemory(MemoryInfo *, u32 *, u64);\n"
                 "int svcMapMemory(void *, void *, size_t);\n"
                 "int svcUnmapMemory(void *, void *, size_t);\n"
             )
@@ -118,18 +127,33 @@ class MemoryMappingTest(unittest.TestCase):
 #include "switch2_mman.h"
 static void *region;
 static int reservations, mappings;
+static int use_fixed_window = 1;
 static VirtmemReservation reservation;
+int svcGetInfo(u64 *value, u32 type, int process, int sub) {
+    (void)process; (void)sub;
+    if (!use_fixed_window) return 1;
+    if (type == InfoType_StackRegionAddress) *value = 0x1000000000ULL;
+    else if (type == InfoType_StackRegionSize) *value = 0x20000000ULL;
+    else return 1;
+    return 0;
+}
+int svcQueryMemory(MemoryInfo *info, u32 *page, u64 address) {
+    (void)page; info->addr = address; info->size = 0x20000000ULL; info->type = MemType_Unmapped;
+    return 0;
+}
 void virtmemLock(void) {}
 void virtmemUnlock(void) {}
 void *virtmemFindStack(size_t n, size_t alignment) {
     return posix_memalign(&region, alignment, n) ? NULL : region;
 }
 VirtmemReservation *virtmemAddReservation(void *p, size_t n) {
-    assert(p == region && n == SWITCH2_XBOX_WINDOW_SIZE);
+    if (!use_fixed_window) assert(p == region);
+    assert(n == SWITCH2_XBOX_WINDOW_SIZE);
     reservations++; return &reservation;
 }
 void virtmemRemoveReservation(VirtmemReservation *p) {
-    assert(p == &reservation); reservations--; free(region);
+    assert(p == &reservation); reservations--;
+    if (!use_fixed_window) free(region);
 }
 int svcMapMemory(void *dst, void *src, size_t n) {
     (void)dst; (void)src; (void)n; mappings++; return 0;
@@ -148,6 +172,11 @@ int main(void) {
     switch2_mman_shutdown();
     assert(!reservations && !mappings && !switch2_mman_run_count());
     assert(!switch2_mman_committed_bytes() && !xbox_address_space_base);
+    use_fixed_window = 0;
+    region = NULL;
+    assert(switch2_mman_init() && reservations == 1 && region);
+    switch2_mman_shutdown();
+    assert(!reservations);
     return 0;
 }
 ''')
