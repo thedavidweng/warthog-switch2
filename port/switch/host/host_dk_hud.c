@@ -58,7 +58,8 @@ static struct
 {
 	int state;
 	/* the guest's: its PNG and its tag's name */
-	uint32_t png, png_size, tag;
+	dk_addr_t png, tag;
+	uint32_t png_size;
 	struct host_dk_hud_levels levels;
 	/* (let go while being decoded: dropped when done) */
 	int forgotten;
@@ -240,7 +241,8 @@ static void *sheet_thread(void *unused)
 	for (;;)
 	{
 		struct host_dk_hud_levels levels;
-		uint32_t png, png_size, tag;
+		dk_addr_t png, tag;
+		uint32_t png_size;
 		uint64_t start;
 		long asset;
 		int decoded;
@@ -305,7 +307,7 @@ static void *sheet_thread(void *unused)
 }
 
 /* (under lock) */
-static void sheet_queue(uint32_t asset, uint32_t png, uint32_t png_size, uint32_t tag, int demand)
+static void sheet_queue(uint32_t asset, dk_addr_t png, uint32_t png_size, dk_addr_t tag, int demand)
 {
 	if (!thread_started)
 	{
@@ -343,7 +345,7 @@ static void sheet_queue(uint32_t asset, uint32_t png, uint32_t png_size, uint32_
 
 /* the bytes a sheet's levels will take, from its PNG's header (0 if it
 has none) */
-static uint64_t sheet_bytes(uint32_t png, uint32_t png_size)
+static uint64_t sheet_bytes(dk_addr_t png, uint32_t png_size)
 {
 	const unsigned char *data = (const unsigned char *)(uintptr_t)png;
 	uint32_t width, height, level = 0;
@@ -438,7 +440,7 @@ void host_dk_hud_forget(void)
 			"held at most)", (unsigned)ready, let_go / 1048576.0, held_most / 1048576.0);
 }
 
-int host_dk_hud_ready(unsigned int asset, unsigned int png, unsigned int png_size, unsigned int tag)
+int host_dk_hud_ready(unsigned int asset, dk_addr_t png, unsigned int png_size, dk_addr_t tag)
 {
 	int answer;
 

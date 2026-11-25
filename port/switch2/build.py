@@ -203,6 +203,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         f"-isystem {_quote(libounce / 'include')}",
         f"-I{_quote(HOST_DIR)}",
         f"-I{_quote(BUILD)}",
+        f"-I{_quote(port.game / 'port/android/include')}",
+        f"-I{_quote(port.game / 'port/third_party/zlib')}",
     ])
     library_paths = " ".join(f"-L{_quote(path)}" for path in
                              (portlibs_switch2 / "lib", devkitpro / "portlibs" / "switch" / "lib",
@@ -261,6 +263,16 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                 variables={"cflags": f"{code_flags} {includes}"})
         objects.append(obj)
 
+    # Ampere binaries must never share Maxwell's shader-cache namespace.
+    uam_commit = record["dependencies"]["uam2"]["commit"][:12]
+    renderer_flags = f"{code_flags} {includes} -DHOST_DK_UAM_COMMIT='\"ampere-{uam_commit}\"'"
+    for name in ("host_dk.c", "host_dk_shaders.c", "host_dk_hud.c"):
+        source = PORT_DIR.parent / "switch/host" / name
+        obj = BUILD / "host" / (name + ".o")
+        n.build(outputs=obj, rule="switch2_cc", inputs=source,
+                variables={"cflags": renderer_flags})
+        objects.append(obj)
+
     engine_build = runpy.run_path(str(PORT_DIR / "engine_build.py"))
     engine_build["fetch_sdl_headers"](BUILD)
     game_objects = engine_build["engine_objects"](n, port, BUILD, code_flags, includes)
@@ -294,6 +306,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                  + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
                  + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
                  " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
+                 " -Wl,-u,host_dk_submit -Wl,-u,host_dk_output_height"
+                 " -Wl,-u,host_dk_shader_find -Wl,-u,host_dk_compile_glsl"
                  " -Wl,--wrap=hidInitializeTouchScreen -lstdc++ -Wl,-Map,$out.map"),
         description="SWITCH2 ENGINE LINK $out",
     )

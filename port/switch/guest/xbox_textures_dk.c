@@ -567,7 +567,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 		}
 		command = dk_stream_command(DK_COMMAND_TEXTURE, sizeof(*command));
 		command->format = compressed_format(information.kind);
-		command->source = (uint32_t)(uintptr_t)base;
+		command->source = (dk_addr_t)(uintptr_t)base;
 		command->face_bytes = (uint32_t)face_size;
 		command->source_bytes = (uint32_t)source_bytes;
 	}
@@ -596,7 +596,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 			reach_note(description, (unsigned long)base, decoded);
 		command = dk_stream_command(DK_COMMAND_TEXTURE, sizeof(*command));
 		command->format = DK_TEXTURE_BGRA;
-		command->source = (uint32_t)(uintptr_t)decoded;
+		command->source = (dk_addr_t)(uintptr_t)decoded;
 		command->face_bytes = (uint32_t)per_face;
 		command->source_bytes = (uint32_t)total;
 	}
@@ -722,7 +722,7 @@ static void rows_send(uint32_t id, unsigned long level, unsigned long width, uns
 	command->level = (uint32_t)level;
 	command->top = (uint32_t)top;
 	command->rows = (uint32_t)rows;
-	command->source = (uint32_t)(uintptr_t)buffer;
+	command->source = (dk_addr_t)(uintptr_t)buffer;
 	command->source_bytes = (uint32_t)(rows * width * 4);
 	/* (last: it may hand the stream over, which the command is in) */
 	dk_stream_free_after_handover(buffer, rows * width * 4);
@@ -944,9 +944,9 @@ static void hud_sheet_fill(long asset, struct dk_hud_sheet *sheet)
 	const struct hud_hires_embedded *embedded = &hud_hires_embedded[asset];
 
 	sheet->asset = (uint32_t)asset;
-	sheet->png = (uint32_t)(uintptr_t)embedded->png;
+	sheet->png = (dk_addr_t)(uintptr_t)embedded->png;
 	sheet->png_size = embedded->png_size;
-	sheet->tag = (uint32_t)(uintptr_t)embedded->tag;
+	sheet->tag = (dk_addr_t)(uintptr_t)embedded->tag;
 }
 
 void dk_hud_prepare(const long *assets, long count)
@@ -987,8 +987,8 @@ static uint32_t hud_image(long asset, unsigned long *levels)
 		if (hud_images[asset].asked_frame == texture_frame + 1)
 			return 0;
 		hud_images[asset].asked_frame = texture_frame + 1;
-		answer = host_dk_hud_ready((unsigned int)asset, (unsigned int)(uintptr_t)embedded->png, embedded->png_size,
-			(unsigned int)(uintptr_t)embedded->tag);
+		answer = host_dk_hud_ready((unsigned int)asset, (dk_addr_t)(uintptr_t)embedded->png, embedded->png_size,
+			(dk_addr_t)(uintptr_t)embedded->tag);
 		if (!answer)
 			return 0;
 		hud_images[asset].tried = TRUE;

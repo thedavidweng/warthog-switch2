@@ -91,7 +91,11 @@ it can be, HALO_GUEST_WINDOW_MAXIMUM (512 MB), is 32 of them */
 
 /* what a frame can upload (CreateIndexBuffer's index data, immediate-mode
 vertices, quad lists' indices); one slice per ring frame */
+#ifdef __SWITCH2__
+#define UPLOAD_SLICE_SIZE (16 * 1024 * 1024)
+#else
 #define UPLOAD_SLICE_SIZE (4 * 1024 * 1024)
+#endif
 #define UPLOAD_ALIGNMENT 256
 
 /* the window ranges a submission's draws read, cleaned from the CPU's cache
@@ -869,6 +873,10 @@ static void command_memory_begin(void)
 	dk.command_rolled_bytes = 0;
 	dk.command_memory_low = 0;
 	command_piece_add();
+#ifdef __SWITCH2__
+	/* Ampere retains descriptor cache entries across command lists. */
+	dkCmdBufBarrier(dk.commands, DkBarrier_None, DkInvalidateFlags_Descriptors);
+#endif
 }
 
 /* the bytes of command memory the frame has used, to the piece */
@@ -1230,6 +1238,11 @@ the way the probe tries it, because deko3d ends the program when it cannot
 make one. */
 static void chunk_block_make(struct window_chunk *chunk)
 {
+#ifdef __SWITCH2__
+	/* Backing runs can be freed by munmap while the GPU is using them.
+	   Until their lifetime is coordinated with GPU fences, upload instead. */
+	(void)chunk;
+#else
 	NvMap map;
 	iova_t address = 0;
 	Result result;
@@ -1271,6 +1284,7 @@ static void chunk_block_make(struct window_chunk *chunk)
 	chunk->gpu = dkMemBlockGetGpuAddr(chunk->block);
 	host_logf(HOST_LOG_INFO, "deko3d: window chunk %p is GPU address %010llx", (void *)(uintptr_t)chunk->address,
 		(unsigned long long)chunk->gpu);
+#endif
 }
 
 /* host_memory.c says a chunk of the window has been committed: noted here,
@@ -1524,14 +1538,22 @@ int host_dk_window_taken(void)
 }
 
 /* the height host_dk_output_height last chose: 720 in handheld, 1080 docked */
+#ifdef __SWITCH2__
+static uint32_t output_height = SCREEN_FULL_HEIGHT;
+#else
 static uint32_t output_height = SCREEN_HEIGHT;
+#endif
 
 /* the guest's, as it chooses its screen's scale (d3d8_dk.c, between frames):
 the height presented at, 1080 while the console is docked and 720 in
 handheld. present remakes the swapchain when it changes */
 unsigned int host_dk_output_height(void)
 {
+#ifdef __SWITCH2__
+	output_height = SCREEN_FULL_HEIGHT;
+#else
 	output_height = appletGetOperationMode() == AppletOperationMode_Console ? SCREEN_FULL_HEIGHT : SCREEN_HEIGHT;
+#endif
 	return output_height;
 }
 
@@ -1547,7 +1569,13 @@ static void swapchain_make(void)
 	dk.screen_height = output_height;
 	dk.screen_width = output_height == SCREEN_FULL_HEIGHT ? SCREEN_FULL_WIDTH : SCREEN_WIDTH;
 	layout_make(&layout, DkImageFormat_RGBA8_Unorm,
-		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression,
+		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine
+#ifndef __SWITCH2__
+		| DkImageFlags_HwCompression
+#else
+		/* VI2 swapchain images cannot use hardware compression. */
+#endif
+		,
 		dk.screen_width, dk.screen_height);
 	image_size = (uint32_t)((dkImageLayoutGetSize(&layout) + dkImageLayoutGetAlignment(&layout) - 1) &
 		~(uint64_t)(dkImageLayoutGetAlignment(&layout) - 1));
@@ -2246,6 +2274,10 @@ static int slot_take(uint32_t *slot)
 	if (tex.slots_free_count)
 	{
 		*slot = tex.slots_free[--tex.slots_free_count];
+#ifdef __SWITCH2__
+		/* Ampere does not invalidate a reused descriptor automatically. */
+		dkCmdBufBarrier(dk.commands, DkBarrier_None, DkInvalidateFlags_Descriptors);
+#endif
 		return 1;
 	}
 	if (tex.slot_next == IMAGE_SLOTS)
@@ -3399,7 +3431,7 @@ static struct
 	int present;
 } picture;
 
-int host_dk_picture(unsigned int rgba, unsigned int width, unsigned int height)
+int host_dk_picture(dk_addr_t rgba, unsigned int width, unsigned int height)
 {
 	uint64_t bytes = (uint64_t)width * height * 4;
 	struct picture_slot *slot;
@@ -4654,7 +4686,7 @@ static void render_queue_drain(void)
 	pthread_mutex_unlock(&render_queue.lock);
 }
 
-void host_dk_submit(uint32_t commands, uint32_t size)
+void host_dk_submit(dk_addr_t commands, uint32_t size)
 {
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
 	unsigned index;

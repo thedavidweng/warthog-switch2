@@ -90,7 +90,12 @@ the probe's workers ran with (phase 5, step 1) */
 #define DKSH_THREAD_STACK (2 * 1024 * 1024)
 /* the compile threads: one for each helper core (the console gives a title
 three, and the game thread keeps one to itself) */
+#ifdef __SWITCH2__
+/* UAM2 serializes compilation; Switch 1's worker measurements do not apply. */
+#define DKSH_COMPILE_THREADS 1
+#else
 #define DKSH_COMPILE_THREADS 2
+#endif
 
 /* the DKSH file's header, as the probe's shader_load reads it */
 struct dksh_header
@@ -1621,7 +1626,7 @@ static void *loader_thread(void *unused)
 
 /* ---------- the imports (the game thread) */
 
-uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, uint32_t state_out)
+uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, dk_addr_t state_out)
 {
 	struct dksh_slot *slot;
 	uint32_t handle = 0, state = 0;
@@ -1849,7 +1854,7 @@ uint32_t host_dk_shader_pending_urgent(uint32_t priority)
 	return pending;
 }
 
-void host_dk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl, uint32_t glsl_size, uint32_t priority)
+void host_dk_shader_compile(uint32_t stage, uint64_t hash, dk_addr_t glsl, uint32_t glsl_size, uint32_t priority)
 {
 	struct dksh_request request;
 	uint32_t index;

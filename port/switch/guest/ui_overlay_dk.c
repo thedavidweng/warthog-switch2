@@ -914,8 +914,8 @@ int ui_overlay_platform(int platform, float size, float x, float y, unsigned int
 /* ---------- the renderer's part (deko3d: port/switch/guest/d3d8_dk.c) */
 
 /* the host's shader service (dk_shaders.c declares these too) */
-uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, uint32_t state_out);
-void host_dk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl, uint32_t glsl_size, uint32_t priority);
+uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, dk_addr_t state_out);
+void host_dk_shader_compile(uint32_t stage, uint64_t hash, dk_addr_t glsl, uint32_t glsl_size, uint32_t priority);
 
 /* raised by a change to either shader's text, so that the cache on the
 card compiles it again (its hash is of the text and this) */
@@ -1021,14 +1021,14 @@ static uint32_t shader_handle(int stage, const char *source, uint32_t *cached)
 		return *cached;
 	hash = dk_shader_hash_mix(dk_shader_hash_init(), source, strlen(source));
 	hash = dk_shader_hash_mix(hash, &version, sizeof(version));
-	handle = host_dk_shader_find((uint32_t)stage, hash, (uint32_t)(uintptr_t)&state);
+	handle = host_dk_shader_find((uint32_t)stage, hash, (dk_addr_t)(uintptr_t)&state);
 	if (handle)
 	{
 		*cached = handle;
 		return handle;
 	}
 	if (state != 1)
-		host_dk_shader_compile((uint32_t)stage, hash, (uint32_t)(uintptr_t)source, (uint32_t)strlen(source),
+		host_dk_shader_compile((uint32_t)stage, hash, (dk_addr_t)(uintptr_t)source, (uint32_t)strlen(source),
 			DK_SHADER_PRIORITY_DRAW);
 	return 0;
 }
@@ -1063,7 +1063,7 @@ static void rows_send(uint32_t id, unsigned long width, unsigned long top, unsig
 	command->level = 0;
 	command->top = (uint32_t)top;
 	command->rows = (uint32_t)rows;
-	command->source = (uint32_t)(uintptr_t)buffer;
+	command->source = (dk_addr_t)(uintptr_t)buffer;
 	command->source_bytes = (uint32_t)(rows * width * 4);
 	dk_stream_free_after_handover(buffer, rows * width * 4);
 }

@@ -546,7 +546,7 @@ static float dword_to_float(DWORD value)
 Commands are written here over a frame and handed to the host half
 (port/switch/host/host_dk.c) at its end, or sooner if the stream fills. */
 
-void host_dk_submit(unsigned int commands, unsigned int size);
+void host_dk_submit(dk_addr_t commands, unsigned int size);
 /* the highest submission the GPU has finished (host_dk.c) */
 unsigned int host_dk_retired(void);
 /* the queue drained (host_dk.c) */
@@ -561,7 +561,7 @@ unsigned int host_dk_visibility(unsigned int index);
 
 #define STREAM_SIZE (1024 * 1024)
 
-static uint32_t stream[STREAM_SIZE / 4];
+static uint32_t stream[STREAM_SIZE / 4] __attribute__((aligned(sizeof(dk_addr_t))));
 static unsigned long stream_used;
 /* Each handing over of the stream is one submission, numbered from 1 as the
 host numbers them: this is the number of the one being written. */
@@ -612,7 +612,7 @@ static void stream_flush(void)
 {
 	if (!stream_used)
 		return;
-	host_dk_submit((unsigned int)(uintptr_t)stream, (unsigned int)stream_used);
+	host_dk_submit((dk_addr_t)(uintptr_t)stream, (unsigned int)stream_used);
 	stream_used = 0;
 	/* (this submission's buffers kept until the GPU has finished it) */
 	while (pending_free_count)
@@ -634,7 +634,7 @@ static void *stream_command(uint32_t type, unsigned long size)
 {
 	struct dk_command_header *header;
 
-	size = (size + 3) & ~3UL;
+	size = (size + sizeof(dk_addr_t) - 1) & ~(sizeof(dk_addr_t) - 1);
 	if (stream_used + size > STREAM_SIZE)
 		stream_flush();
 	header = (struct dk_command_header *)((unsigned char *)stream + stream_used);
@@ -2842,10 +2842,10 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
-	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(dk_addr_t) + index_bytes);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
-	command->index_address = index_bytes ? DK_INDEX_INLINE : (uint32_t)(uintptr_t)indices;
+	command->index_address = index_bytes ? DK_INDEX_INLINE : (dk_addr_t)(uintptr_t)indices;
 	if (index_bytes)
 		memcpy(&command->streams[streams], indices, count * sizeof(WORD));
 	command->vertex_offset = (int32_t)vertex_offset;
@@ -2857,7 +2857,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 		if (!((format_told.stream_mask >> stream) & 1))
 			continue;
-		command->streams[slot][0] = (uint32_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
+		command->streams[slot][0] = (dk_addr_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
 			(uint32_t)(first * stride);
 		command->streams[slot][1] = (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 		slot++;
@@ -3022,7 +3022,7 @@ int dk_overlay_draw(const struct dk_overlay_draw *draw)
 		count -= count % 3;
 		if (!count)
 			break;
-		command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + count * draw->stride);
+		command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(dk_addr_t) + count * draw->stride);
 		command->primitive = DK_PRIMITIVE_TRIANGLES;
 		command->count = (uint32_t)count;
 		command->index_address = 0;
@@ -3126,7 +3126,7 @@ void WINAPI D3DDevice_End(void)
 	format.strides[0] = (uint32_t)stride;
 	format.stream_mask = 1;
 	draw_format_send(&format);
-	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + count * stride);
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(dk_addr_t) + count * stride);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
 	command->index_address = 0;
@@ -3296,7 +3296,7 @@ void halo_draw_picture(const unsigned char *rgba, long width, long height)
 	surface_describe(&device.back_buffer, FALSE, &back_buffer, scale);
 	if (back_buffer.kind != DK_SURFACE_COLOR)
 		return;
-	slot = host_dk_picture((uint32_t)(uintptr_t)rgba, (uint32_t)width, (uint32_t)height);
+	slot = host_dk_picture((dk_addr_t)(uintptr_t)rgba, (uint32_t)width, (uint32_t)height);
 	if (slot < 0)
 		return;
 	command = stream_command(DK_COMMAND_PICTURE, sizeof(*command));
@@ -3414,7 +3414,7 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 			screenshot_width = command->back_buffer.pixel_width;
 			screenshot_height = command->back_buffer.pixel_height;
 			screenshot_pixels = malloc((unsigned long)screenshot_width * screenshot_height * 4);
-			command->screenshot = (uint32_t)(uintptr_t)screenshot_pixels;
+			command->screenshot = (dk_addr_t)(uintptr_t)screenshot_pixels;
 		}
 	}
 	stream_flush();
