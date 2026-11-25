@@ -35,6 +35,7 @@ same commands work outside it.
 
 import json
 import os
+import runpy
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -120,7 +121,8 @@ def devkitpro_dir(sln: Any) -> Optional[Path]:
 
 def configure_inputs(port: ConsolePort) -> List[Path]:
     """Files whose change must re-run configure.py."""
-    return [port.path("host"), port.path("README.md"), REPO_ROOT / "UPSTREAM.json",
+    return [port.path("host"), port.path("README.md"), port.path("engine_build.py"),
+            port.path("overrides"), REPO_ROOT / "UPSTREAM.json",
             port.path("probe/warthog.vert"), port.path("probe/warthog.frag")]
 
 
@@ -195,6 +197,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # still come from there), then libounce's own headers. The Switch 2
     # headers must come first: switch2/ shadows switch/ where the two differ.
     includes = " ".join([
+        f"-I{_quote(PORT_DIR / 'include')}",
         f"-I{_quote(portlibs_switch2 / 'include')}",
         f"-I{_quote(devkitpro / 'portlibs' / 'switch' / 'include')}",
         f"-isystem {_quote(libounce / 'include')}",
@@ -247,7 +250,10 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     )
     objects = []
     for source in sorted((HOST_DIR).glob("*.c")):
-        if source.name == "nx2_platform.c":
+        if source.name in {
+            "switch2_tls.c", "switch2_net.c", "switch2_headless_platform.c", "switch2_sdl_headless.c",
+            "switch2_posix_compat.c", "headless_engine.c"
+        }:
             continue
         obj = BUILD / "host" / (source.name + ".o")
         n.build(outputs=obj, rule="switch2_cc", inputs=source,
@@ -255,17 +261,43 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                 variables={"cflags": f"{code_flags} {includes}"})
         objects.append(obj)
 
+    engine_build = runpy.run_path(str(PORT_DIR / "engine_build.py"))
+    engine_build["fetch_sdl_headers"](BUILD)
+    game_objects = engine_build["engine_objects"](n, port, BUILD, code_flags, includes)
+    game_archive = BUILD / "libwarthog_game.a"
+    n.rule(name="switch2_ar",
+           command=f"{devkitpro / 'devkitA64/bin/aarch64-none-elf-gcc-ar'} rcs $out @$out.rsp",
+           description="SWITCH2 AR $out", rspfile="$out.rsp", rspfile_content="$in_newline")
+    n.build(outputs=game_archive, rule="switch2_ar", inputs=game_objects)
+    n.build(outputs="switch2-engine-game", rule="phony", inputs=game_archive)
+    platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release)
+    platform_archive = BUILD / "libwarthog_platform.a"
+    n.build(outputs=platform_archive, rule="switch2_ar", inputs=platform_objects)
+
     elf = BUILD / "warthog.elf"
     n.rule(
         name="switch2_link",
         # the C++ driver links even though the program is C: UAM2's runtime is
         # C++ (Mesa's NAK is), and its standard library comes with it
-        command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out $in {library_paths} "
+        command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out @$out.rsp {library_paths} "
                  + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
                  + " -lstdc++ -Wl,-Map,$out.map"),
         description="SWITCH2 LINK $out",
+        rspfile="$out.rsp",
+        rspfile_content="$in_newline",
     )
-    n.build(outputs=elf, rule="switch2_link", inputs=objects)
+    n.rule(
+        name="switch2_engine_link",
+        command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out "
+                 f"{' '.join(str(obj) for obj in objects)} -Wl,--start-group "
+                 f"{game_archive} {platform_archive} -Wl,--end-group {library_paths} "
+                 + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
+                 + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
+                 " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
+                 " -Wl,--wrap=hidInitializeTouchScreen -lstdc++ -Wl,-Map,$out.map"),
+        description="SWITCH2 ENGINE LINK $out",
+    )
+    n.build(outputs=elf, rule="switch2_engine_link", inputs=[*objects, game_archive, platform_archive])
 
     # ---------- the card's metadata: NACP and icon
 

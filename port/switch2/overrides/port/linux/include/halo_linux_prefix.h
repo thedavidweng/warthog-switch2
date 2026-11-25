@@ -1,0 +1,239 @@
+/*
+HALO_LINUX_PREFIX.H
+
+Force-included ahead of every translation unit in the native Linux build
+(clang -include). It reproduces the handful of MSVC/XDK environment
+assumptions that the game source relies on, so the source itself can stay
+byte-for-byte identical to what the matching MSVC build compiles.
+*/
+
+#ifndef __HALO_LINUX_PREFIX_H
+#define __HALO_LINUX_PREFIX_H
+
+#ifdef __SWITCH2__
+#define __int64 long long
+#define __int32 int
+#define __int16 short
+#define __int8 char
+#define __stdcall
+#define _stdcall
+#define __cdecl
+#define _cdecl
+#define __fastcall
+#define _fastcall
+extern unsigned long long xbox_address_space_base;
+#define XBOX_ADDRESS_SPACE_BASE xbox_address_space_base
+typedef __WCHAR_TYPE__ wchar_t;
+#endif
+
+#if !defined(__i386__) && !defined(__arm__) && !defined(HALO_ANDROID) && !defined(HALO_64BIT)
+#error the Linux port targets 32-bit x86 or ARM: game data structures assume 32-bit pointers
+#endif
+
+/* ---------- musl's wide characters (the static dedicated servers,
+tools/server_build.py: HALO_MUSL)
+
+musl types wchar_t and wint_t as its ABI's 32-bit integers, whatever the
+compiler's -fshort-wchar says; glibc takes the compiler's. The game's are
+16 bits wide: typed here first, ahead of every header, so that musl's own
+(their __DEFINED_ guards) keep them. */
+
+#ifdef HALO_MUSL
+typedef __WCHAR_TYPE__ wchar_t;
+#define __DEFINED_wchar_t
+typedef unsigned short wint_t;
+#define __DEFINED_wint_t
+#define __wint_t_defined 1
+#define _WINT_T 1
+#endif
+
+/* ---------- pointers inside Xbox data (the 64-bit build; a no-op for the
+32-bit ones) */
+
+#include "../../../source/cseries/xbox_address.h"
+
+/* ---------- the renderer's OpenGL ES path
+
+OpenGL ES rather than desktop OpenGL (port/linux/src/d3d8_gl.c and the
+rest of the renderer): Android's ES 3, and a console whose ES 2 the port
+fills out to the ES 3 the renderer uses (HALO_CONSOLE_GLES2, the Steam
+Link's: console_gles2_layer) */
+
+#if (defined(HALO_ANDROID) || defined(HALO_CONSOLE_GLES2)) && !defined(HALO_GL_ES)
+#define HALO_GL_ES 1
+#endif
+
+/* ---------- XDK architecture selection (MSVC predefines these) */
+
+#define _X86_ 1
+#define _M_IX86 600
+#define _STDCALL_SUPPORTED 1
+#define _INTEGRAL_MAX_BITS 64
+#define _WCHAR_T_DEFINED
+#define _USE_MATH_DEFINES
+/* the XDK's COM headers decorate methods with __export when _WIN32 is unset */
+#define __export
+
+/* ---------- the host C library on macOS and 64-bit Linux
+
+Apple's libc headers use `__inline` for their extern inline helpers, which the MSVC inline semantics below redefine. Include the
+C runtime headers the game uses before that happens; their include guards
+keep later includes from seeing the redefinition. <limits.h> is left out:
+cseries.h defines LONG_MAX and friends as enumerators. wint_t is 16 bits wide
+with -fshort-wchar and must be fixed before the host headers define theirs.
+The 64-bit builds also need the declarations themselves: they reject an
+implicitly declared function (its int result would truncate a pointer). */
+
+#if defined(__APPLE__) || defined(HALO_64BIT)
+#ifndef __APPLE__
+/* glibc: no extern-inline helpers (__NO_INLINE__ below; its headers are
+read here first), and the ctype functions as functions, not macros, which
+the game declares itself; uintptr_t, which Apple's <sys/types.h> declares */
+#define __NO_INLINE__ 1
+#define __NO_CTYPE 1
+#include <stdint.h>
+#endif
+#include <stddef.h>
+#ifndef __wint_t_defined
+#define __wint_t_defined 1
+#define _WINT_T 1
+typedef unsigned short wint_t;
+#endif
+/* the XDK's Winsock declares a 32-bit u_long; the host's is 64 */
+#define u_long halo_host_u_long
+#include <sys/types.h>
+#undef u_long
+#if defined(__ANDROID__) || defined(__SWITCH2__)
+/* bionic declares POSIX's strnlen and random whatever the feature macros
+say; the game has its own, of other types (cseries.h, real_math.h) */
+#define strnlen halo_bionic_strnlen
+#define random halo_bionic_random
+#endif
+#include <stdarg.h>
+#include <float.h>
+#include <ctype.h>
+#ifdef __SWITCH2__
+#undef isalpha
+#undef isupper
+#undef islower
+#undef isdigit
+#undef isxdigit
+#undef isspace
+#undef ispunct
+#undef isalnum
+#undef isprint
+#undef isgraph
+#undef iscntrl
+#undef toupper
+#undef tolower
+#endif
+#include <errno.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <time.h>
+#ifdef __SWITCH2__
+#include <sys/time.h>
+#ifdef HALO_LINUX_PLATFORM_LAYER
+int clock_nanosleep(clockid_t, int, const struct timespec *, struct timespec *);
+#endif
+#endif
+#include <math.h>
+#ifdef __SWITCH2__
+/* Newlib hides C99 declarations in the game's GNU89 mode. */
+float nextafterf(float, float);
+float sqrtf(float);
+float fabsf(float);
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <assert.h>
+#if defined(__ANDROID__) || defined(__SWITCH2__)
+#undef strnlen
+#undef random
+#if defined(__SWITCH2__) && defined(HALO_LINUX_PLATFORM_LAYER)
+size_t strnlen(const char *, size_t);
+#endif
+#endif
+#endif
+
+/* ---------- MSVC inline semantics
+
+MSVC gives C `__inline` functions COMDAT (pick-any) linkage. ELF C has no
+equivalent, so every translation unit gets its own private copy instead.
+Clang only warns about the resulting `static static`. */
+
+#ifdef __SWITCH2__
+#define __inline extern __inline__ __attribute__((gnu_inline, always_inline))
+#define _inline extern __inline__ __attribute__((gnu_inline, always_inline))
+#define __forceinline extern __inline__ __attribute__((gnu_inline, always_inline))
+#else
+#define __inline static __inline__
+#define _inline static __inline__
+#define __forceinline static __inline__ __attribute__((always_inline))
+#endif
+
+/* An inline function that also has an ordinary prototype keeps external
+linkage; the generated halo_msvc_semantics.h marks every inline function
+name `#pragma weak`, making those definitions pick-any like a COMDAT. */
+
+/* glibc spells its own extern-inline helpers with __inline; keep it from
+emitting them so the redefinition above cannot reach them. */
+#define __NO_INLINE__ 1
+
+/* ---------- __declspec(selectany) data (XDK D3DCONST tables) */
+
+#define DECLSPEC_SELECTANY __attribute__((weak))
+
+/* ---------- MSVC intrinsics
+
+Clang predeclares the MSVC _Interlocked* builtins with prototypes that
+conflict with the XDK's WINAPI declarations; route the XDK names to the
+platform layer instead. */
+
+#define _InterlockedCompareExchange halo_linux_InterlockedCompareExchange
+#define _InterlockedDecrement halo_linux_InterlockedDecrement
+#define _InterlockedExchange halo_linux_InterlockedExchange
+#define _InterlockedExchangeAdd halo_linux_InterlockedExchangeAdd
+#define _InterlockedIncrement halo_linux_InterlockedIncrement
+
+/* ---------- structured exception handling
+
+Only the top-level crash handler in main() uses SEH. POSIX has no equivalent
+(the platform layer installs signal handlers instead), so the guarded block
+always runs and the handler is compiled out. */
+
+#define __try if (1)
+#define __except(filter) else if (0)
+#define __finally
+#define __leave
+
+/* ---------- multiplayer session limits of the native builds */
+
+#include "halo_port_limits.h"
+
+/* the Xbox Winsock headers' fd_set in game units (platform units see glibc's,
+which is larger) */
+#ifndef HALO_LINUX_PLATFORM_LAYER
+#ifdef __SWITCH2__
+#undef FD_SETSIZE
+#endif
+#define FD_SETSIZE HALO_PORT_FD_SETSIZE
+#endif
+
+/* ---------- Winsock
+
+Game code sees the XDK's Winsock under private names (see the header). The
+platform layer includes the XDK headers itself, via platform.h. */
+
+#ifndef HALO_LINUX_PLATFORM_LAYER
+#include "halo_linux_winsock_names.h"
+#include "halo_linux_source_fixups.h"
+#endif
+
+/* ---------- MSVC built-in types */
+
+#include <stddef.h>
+
+#endif /* __HALO_LINUX_PREFIX_H */
