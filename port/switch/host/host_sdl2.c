@@ -60,6 +60,7 @@ static void rumble_stop_pad(int pad);
 #ifdef __SWITCH2__
 typedef uintptr_t sdl_guest_address;
 #include "../../switch2/host/switch2_perf.h"
+static struct switch2_perf_stats switch2_stats;
 #else
 typedef uint32_t sdl_guest_address;
 #endif
@@ -527,7 +528,6 @@ static void frame_statistics(void)
 
 		host_dk_frame_report(&report);
 #if defined(__SWITCH2__) && WARTHOG_DEV_PROFILING
-		static struct switch2_perf_stats switch2_stats;
 		static unsigned switch2_frames;
 		switch2_perf_record_frame(&switch2_stats, milliseconds, report.gpu_last_us / 1000.0,
 			report.submit_wait_us, report.acquire_max_us, report.fence_max_us);
@@ -1425,6 +1425,11 @@ void host_sdl_quit(void)
 	for (index = 0; index < RUMBLE_PADS; index++)
 		if (gyro_pads[index].started)
 			hidStopSixAxisSensor(gyro_pads[index].handles[gyro_pads[index].sensor]);
+#if WARTHOG_DEV_PROFILING
+	if (switch2_stats.frame_count > 0)
+		switch2_perf_flush(&switch2_stats, getenv("WARTHOG_SWITCH2_SCENE") ?: "main_menu",
+			"Normal", 0.0);
+#endif
 	switch2_text_nmouse_stop();
 	SDL_Quit();
 }

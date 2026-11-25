@@ -48,6 +48,15 @@ class GameShareTest(unittest.TestCase):
         self.assertIn("player = 1", input_text)
         self.assertIn("player zero and player one cannot cross-talk", input_text)
 
+    def test_sdl_bridge_wires_gameshare_guest(self):
+        text = (HOST / "switch2_sdl3_bridge.c").read_text()
+        for symbol in ("switch2_gameshare_update", "SDL_EVENT_GAMEPAD_ADDED",
+                       "SDL_EVENT_GAMEPAD_REMOVED", "SWITCH2_GAMESHARE_GAMEPAD_ID",
+                       "switch2_gameshare_guest_input", "nx2GameShareSetGuestRumble"):
+            self.assertIn(symbol, text)
+        self.assertIn("switch2_gameshare_guest_audio",
+                      (ROOT / "port/switch/host/host_sdl2.c").read_text())
+
     def test_normal_split_screen_remains_four_players(self):
         text = (HOST / "switch2_input.h").read_text()
         self.assertIn("SWITCH2_LOCAL_PLAYER_COUNT 4u", text)

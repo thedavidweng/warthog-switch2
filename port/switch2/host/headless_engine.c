@@ -160,7 +160,10 @@ int warthog_headless_engine_run(void)
 		warthog_log("ERROR", "FAIL: headless ui.map path too long");
 	}
 	else if (access(ui_path, R_OK) != 0)
-		warthog_log("INFO", "SKIP: headless ui.map not present at %s", ui_path);
+	{
+		failed = 1;
+		warthog_log("ERROR", "FAIL: headless ui.map not present at %s", ui_path);
+	}
 	else
 	{
 		long scnr, count = 0;

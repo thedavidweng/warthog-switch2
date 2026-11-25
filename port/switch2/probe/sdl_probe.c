@@ -87,5 +87,5 @@ int main(void)
 	fprintf(log, "display.release=0x%x\n", switch2PlatformReleaseWindow());
 	fprintf(log, "clock.normal=0x%x\n", switch2PlatformRestoreClock());
 	fclose(log);
-	return init != 0;
+	return init == 0 ? 0 : 1;
 }
