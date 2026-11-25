@@ -47,6 +47,7 @@ Android, each request goes to a thread that has one.
 
 #ifdef __SWITCH2__
 typedef uintptr_t sdl_guest_address;
+#include "../../switch2/host/switch2_perf.h"
 #else
 typedef uint32_t sdl_guest_address;
 #endif
@@ -511,6 +512,17 @@ static void frame_statistics(void)
 		double milliseconds = (double)(now - previous) * 1000.0 / (double)SDL_GetPerformanceFrequency();
 
 		host_dk_frame_report(&report);
+#if defined(__SWITCH2__) && WARTHOG_DEV_PROFILING
+		static struct switch2_perf_stats switch2_stats;
+		static unsigned switch2_frames;
+		switch2_perf_record_frame(&switch2_stats, milliseconds, report.gpu_last_us / 1000.0,
+			report.submit_wait_us, report.acquire_max_us, report.fence_max_us);
+		if (++switch2_frames == 300) {
+			switch2_perf_flush(&switch2_stats, getenv("WARTHOG_SWITCH2_SCENE") ?: "main_menu",
+				"Normal", 0.0);
+			switch2_frames = 0;
+		}
+#endif
 		host_debug_profile_spike((uint64_t)(milliseconds * 1000000.0));
 		if (milliseconds > 20.0)
 		{

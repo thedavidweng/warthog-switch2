@@ -56,6 +56,7 @@ void host_debug_thread_backtrace(uint32_t handle, const char *who)
 }
 
 void host_debug_profile_spike(uint64_t frame_ns) { (void)frame_ns; }
+void host_debug_shutdown(void) {}
 void host_memory_report(const char *when)
 {
 	host_logf(HOST_LOG_INFO, "heap %s: %llu bytes free", when, (unsigned long long)heapGetFreeSize());
@@ -72,6 +73,7 @@ void host_ui_message(const char *title, const char *message, const char *const *
 void host_sdl_quit(void);
 void host_exit(int code)
 {
+	host_debug_shutdown();
 	host_dk_shutdown();
 	host_sdl_quit();
 	switch2PlatformRestoreClock();
