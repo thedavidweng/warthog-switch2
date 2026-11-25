@@ -260,15 +260,13 @@ These are properties of the target, not bugs to work around:
 Every graphical and lifecycle claim is eventually checked on a console. The
 loop is:
 
-1. `ninja switch2`.
-2. Deploy over FTP to a console running kaiHEN with `ftpd` (and `sw2transfer`
-   where the environment provides it). Until the Switch 2 dev loop lands,
-   `tools/switch_deploy.py` still defaults to the original Switch's paths, so
-   point it at the Switch 2 card explicitly:
-   `python3 tools/switch_deploy.py --host <switch2-ip> --port <port>
-   --destination /switch/warthog build/switch2/warthog.nro`.
-3. Read the logs back with `tools/switch_logs.py`; symbolize a crash against
-   the matching unstripped ELF.
+1. Set `WARTHOG_SWITCH2_HOST` to `<switch2-ip>`; optionally set
+   `WARTHOG_SWITCH2_PORT` (default 5000).
+2. Build, package and deploy over FTP to a console running kaiHEN and `ftpd`:
+   `python3 tools/switch_deploy.py --target switch2 --build`.
+3. Fetch logs and symbolize a crash against the matching unstripped ELF:
+   `python3 tools/switch_logs.py --target switch2`. Use `--elf <path>` to
+   select the ELF for a different build.
 4. Record what was observed: the build identifier, the firmware, the launch
    context (`AppletType`), the graphics backend, the shader compiler revision,
    and the actual refresh rate.

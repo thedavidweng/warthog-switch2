@@ -13,12 +13,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "warthog_log.h"
 
 #include <stdarg.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <switch.h>
+#include <switch/arm/thread_context.h>
 
 /* sdmc:/switch/warthog, as the release requirements name it */
 #define WARTHOG_DIR "sdmc:/switch/warthog"
@@ -29,6 +31,104 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #define TICKS_PER_SECOND 19200000ull
 
 static FILE *log_file;
+extern const u8 __start__[];
+
+/* Exception records avoid stdio and allocation, including integer formatting. */
+static void raw_text(int fd, const char *text)
+{
+	const char *end = text;
+	while (*end) end++;
+	while (text < end)
+	{
+		ssize_t written = write(fd, text, end - text);
+		if (written <= 0) return;
+		text += written;
+	}
+}
+
+static void raw_hex(int fd, u64 value)
+{
+	char buffer[19] = "0x";
+	static const char digits[] = "0123456789abcdef";
+	for (int i = 0; i < 16; i++)
+		buffer[2 + i] = digits[(value >> ((15 - i) * 4)) & 15];
+	buffer[18] = 0;
+	raw_text(fd, buffer);
+}
+
+static void raw_field(int fd, const char *name, u64 value)
+{
+	raw_text(fd, name);
+	raw_hex(fd, value);
+	raw_text(fd, "\n");
+}
+
+static void raw_frame(int fd, unsigned number, u64 pc)
+{
+	char index[] = "FRAME #00: ";
+	index[7] = '0' + number / 10;
+	index[8] = '0' + number % 10;
+	raw_text(fd, index);
+	raw_hex(fd, pc);
+	if (pc >= warthog_module_base())
+	{
+		raw_text(fd, " (warthog.elf+");
+		raw_hex(fd, pc - warthog_module_base());
+		raw_text(fd, ")");
+	}
+	raw_text(fd, "\n");
+}
+
+static void raw_frames(int fd, u64 fp, unsigned number)
+{
+	while (number < 32 && fp && !(fp & 15))
+	{
+		MemoryInfo info;
+		u32 page;
+		if (R_FAILED(svcQueryMemory(&info, &page, fp)) || !(info.perm & Perm_R) ||
+			fp < info.addr || info.size < 16 || fp - info.addr > info.size - 16)
+			break;
+		const u64 *frame = (const u64 *)(uintptr_t)fp;
+		u64 next = frame[0], lr = frame[1];
+		raw_frame(fd, number++, lr);
+		if (next <= fp) break;
+		fp = next;
+	}
+}
+
+void __libnx_exception_handler(ThreadExceptionDump *ctx)
+{
+	int fd = open(WARTHOG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
+	if (fd < 0) return;
+	raw_text(fd, "FAULT_KIND: CPU_EXCEPTION\n");
+	raw_field(fd, "error_desc: ", ctx->error_desc);
+	raw_field(fd, "pc: ", ctx->pc.x);
+	raw_field(fd, "lr: ", ctx->lr.x);
+	raw_field(fd, "sp: ", ctx->sp.x);
+	raw_field(fd, "far: ", ctx->far.x);
+	raw_field(fd, "MODULE_BASE: ", warthog_module_base());
+	raw_frame(fd, 0, ctx->pc.x);
+	raw_frames(fd, ctx->fp.x, 1);
+	fsync(fd);
+	close(fd);
+}
+
+void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message)
+{
+	(void)user_data;
+	warthog_log_sync();
+	int fd = open(WARTHOG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
+	if (fd < 0) return;
+	raw_text(fd, "FAULT_KIND: GPU_FAULT\ncontext: ");
+	raw_text(fd, context ? context : "");
+	raw_field(fd, "\nDkResult: ", result);
+	raw_text(fd, "message: ");
+	raw_text(fd, message ? message : "");
+	raw_text(fd, "\n");
+	raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 0);
+	fsync(fd);
+	close(fd);
+}
 
 /* made with mkdir rather than fsdev, so the log does not depend on which
 filesystem services the launch context granted: sdmc is already mounted by

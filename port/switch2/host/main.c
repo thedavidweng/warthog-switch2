@@ -12,9 +12,8 @@ grant are asked about with envIsSyscallHinted and never called: under kaiHEN
 an ungranted one terminates the process instead of returning an error, so the
 answer to "is 0x77 hinted" has to be obtained without invoking 0x77.
 
-Ticket #4 extends this program with the exception handler, Drako3D's device
-and its swapchain; the log it writes here (host/warthog_log.c) is the file
-those records go to.
+The exception and graphics diagnostic records also go to host/warthog_log.c.
+No Drako3D device or swapchain is created by this startup program yet.
 
 SPDX-License-Identifier: GPL-3.0-or-later
 */
@@ -22,6 +21,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <switch.h>
 #include <switch2/memory/heap.h>
@@ -35,6 +35,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 flavor and version and the pins it was made from, so a log from a console
 says exactly which build wrote it */
 #include "warthog_build.h"
+
+extern const u8 __start__[];
+
+__attribute__((noinline)) void warthog_deliberate_test_fault(void)
+{
+	__asm__ volatile("brk #0");
+}
 
 /* The syscalls the original Switch port used and kaiHEN does not grant
 (AGENTS.md, "Platform constraints"). Listed so the log records the answer
@@ -73,8 +80,9 @@ static void log_build(void)
 	warthog_log("INFO", "Warthog for Switch 2 %s (%s build)", WARTHOG_SWITCH2_VERSION, WARTHOG_SWITCH2_FLAVOR);
 	warthog_log("INFO", "pins: warthog-switch %s", WARTHOG_SWITCH2_WARTHOG_SWITCH_COMMIT);
 	warthog_log("INFO", "pins: chupathingyce %s", WARTHOG_SWITCH2_CHUPATHINGYCE_COMMIT);
-	warthog_log("INFO", "pins: drako3d %s", WARTHOG_SWITCH2_DRAKO3D_COMMIT);
-	warthog_log("INFO", "pins: uam2 %s", WARTHOG_SWITCH2_UAM2_COMMIT);
+	warthog_log("INFO", "pins: drako3d %s %s", WARTHOG_SWITCH2_DRAKO3D_VERSION, WARTHOG_SWITCH2_DRAKO3D_COMMIT);
+	warthog_log("INFO", "pins: uam2 %s %s", WARTHOG_SWITCH2_UAM2_VERSION, WARTHOG_SWITCH2_UAM2_COMMIT);
+	warthog_log("INFO", "MODULE_BASE: %p", (void *)warthog_module_base());
 }
 
 static void log_launch_context(void)
@@ -148,8 +156,7 @@ static void log_memory(void)
 		(unsigned long long)(heapGetTotalSize() / 1024), (unsigned long long)(heapGetFreeSize() / 1024));
 }
 
-/* Drako3D's provenance, without a GPU device: ticket #4 creates the device and
-the swapchain, but the link has to be proved here first, so this takes the
+/* Drako3D's provenance, without a GPU device: this takes the
 address of dkDeviceCreate. `--gc-sections` (libounce's switch.specs) keeps
 the archive member that defines a symbol the program references, which is
 what puts libdrako3d.a in warthog.elf.map for tools/switch2_audit.py. */
@@ -159,8 +166,7 @@ static void log_renderer(void)
 		(void *)(uintptr_t)&dkDeviceCreate);
 }
 
-/* The shader compiler's runtime, which is what ticket #4 compiles Ampere
-shaders with: proving it initialises here means a later failure is the
+/* The shader compiler's runtime: proving it initialises here means a later failure is the
 shader, not the runtime */
 static void log_shader_runtime(void)
 {
@@ -178,9 +184,6 @@ static void log_shader_runtime(void)
 
 int main(int argc, char **argv)
 {
-	(void)argc;
-	(void)argv;
-
 	consoleInit(NULL);
 	if (!warthog_log_open())
 	{
@@ -198,6 +201,25 @@ int main(int argc, char **argv)
 	log_memory();
 	log_renderer();
 	log_shader_runtime();
+	const char *trigger = "sdmc:/switch/warthog/trigger_fault.txt";
+	bool cpu_test = false, gpu_test = false;
+	for (int i = 1; i < argc; i++)
+	{
+		if (!strcmp(argv[i], "--self-test-cpu-fault")) cpu_test = true;
+		if (!strcmp(argv[i], "--self-test-gpu-fault")) gpu_test = true;
+	}
+	if (access(trigger, F_OK) == 0)
+	{
+		if (unlink(trigger) == 0) cpu_test = true;
+		else warthog_log("ERROR", "cannot remove fault trigger; skipping it");
+	}
+	if (cpu_test)
+	{
+		warthog_log_sync();
+		warthog_deliberate_test_fault();
+	}
+	if (gpu_test)
+		warthog_dk_debug_callback(NULL, "self-test", DkResult_Fail, "deliberate GPU diagnostic");
 	warthog_log("INFO", "startup complete; returning to the homebrew menu");
 	/* before the screen, which is what a player sees if the sync failed */
 	warthog_log_sync();
