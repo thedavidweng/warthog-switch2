@@ -29,9 +29,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BUILD = ROOT / "build" / "switch"
-BUILD_SWITCH2 = ROOT / "build" / "switch2"
-BROKERS = ROOT / "chupathingyce" / "port" / "assets" / "network" / "brokers.txt"
+
+
+def local_or_root(path: Path) -> Path:
+    local = Path.cwd() / path
+    return local if local.exists() else ROOT / path
+
+
+BUILD = local_or_root(Path("build/switch"))
+BUILD_SWITCH2 = local_or_root(Path("build/switch2"))
+BROKERS = local_or_root(Path("chupathingyce/port/assets/network/brokers.txt"))
 # the folder on the card: HOST_ROOT in port/switch/host/host.h
 CARD_FOLDER = Path("switch") / "ChupaThingyCE"
 # the folder on the card: CARD_DIR in port/switch2/build.py

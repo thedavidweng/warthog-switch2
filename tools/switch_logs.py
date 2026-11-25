@@ -117,7 +117,9 @@ def switch2_main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=os.environ.get("WARTHOG_SWITCH2_HOST"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("WARTHOG_SWITCH2_PORT", "5000")))
-    parser.add_argument("--elf", type=Path, default=ROOT / "build/switch2/warthog.elf")
+    local_elf = Path.cwd() / "build/switch2/warthog.elf"
+    parser.add_argument("--elf", type=Path,
+                        default=local_elf if local_elf.is_file() else ROOT / "build/switch2/warthog.elf")
     parser.add_argument("--no-fetch", action="store_true")
     args = parser.parse_args(argv)
     if not args.no_fetch:

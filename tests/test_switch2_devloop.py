@@ -297,6 +297,26 @@ class LogsTest(unittest.TestCase):
 class PackageTest(unittest.TestCase):
     """tools/switch_package.py lays out the card for the target it is given."""
 
+    def test_switch2_package_prefers_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            build = repo / "build/switch2"
+            build.mkdir(parents=True)
+            (build / "warthog.nro").write_bytes(b"local nro")
+            menus = build / "menus"
+            menus.mkdir()
+            (menus / "local.xml").write_text("local menu")
+            brokers = repo / "chupathingyce/port/assets/network"
+            brokers.mkdir(parents=True)
+            (brokers / "brokers.txt").write_text("local broker")
+            out = repo / "out"
+            result = run(PACKAGE, "--target", "switch2", "--out", str(out), cwd=repo)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            card = out / "switch/warthog"
+            self.assertEqual(b"local nro", (card / "warthog.nro").read_bytes())
+            self.assertEqual("local broker", (card / "brokers.txt").read_text())
+            self.assertEqual("local menu", (card / "menus/local.xml").read_text())
+
     def test_switch2_package_lays_out_the_warthog_card_folder(self):
         with tempfile.TemporaryDirectory() as directory:
             nro = Path(directory) / "warthog.nro"
