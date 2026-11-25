@@ -153,13 +153,45 @@ jobs:
           path: dist/halo-switch-${{ matrix.flavor }}/switch/ChupaThingyCE
           retention-days: 3
 
+  switch2:
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [release, debug]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+      - name: Build toolchain
+        run: scripts/switch2/build.sh image
+      - name: Build and audit
+        run: |
+          case "$GITHUB_REF" in refs/tags/v?*) export HALO_BUILD_NUMBER="$GITHUB_RUN_NUMBER";; esac
+          release=
+          if [ "${{ matrix.flavor }}" = release ]; then release=--release; fi
+          scripts/switch2/build.sh configure $release
+          scripts/switch2/build.sh ninja switch2
+          scripts/switch2/build.sh python3 tools/switch2_audit.py --flavor "${{ matrix.flavor }}" build/switch2
+      - name: Package and audit
+        run: |
+          flavor="${{ matrix.flavor }}"
+          python3 tools/switch_package.py --target switch2 --out "dist/warthog-switch2-$flavor" --release-dir "dist/release-switch2-$flavor" --flavor "$flavor"
+          python3 tools/switch2_audit.py --package "dist/release-switch2-$flavor/warthog-switch2-$flavor.zip" --flavor "$flavor" --symbols "dist/release-switch2-$flavor/warthog-switch2-$flavor-symbols.zip"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: warthog-switch2-${{ matrix.flavor }}
+          path: dist/release-switch2-${{ matrix.flavor }}/*.zip
+          retention-days: 3
+
   release:
     # The two builds as a release, tagged build-<number> (the run's number)
     # for a pushed tag v<version>, titled with the version and marked latest
     # (every file keeps its name from release to release). Only for a tag on
     # a commit of main, numbered higher than the last release, and only when
     # both flavours built.
-    needs: switch
+    needs: [switch, switch2]
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -205,6 +237,11 @@ jobs:
         with:
           pattern: halo-switch-*
           path: artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: warthog-switch2-*
+          path: switch2-artifacts
+          merge-multiple: true
 
       # stored, not deflated (zip -0): the updater unpacks stored entries only
       - name: Package
@@ -214,6 +251,8 @@ jobs:
             name="$(basename "$build")"
             (cd "$build" && zip -0 -qr "$GITHUB_WORKSPACE/release/$name.zip" .)
           done
+          cp switch2-artifacts/*.zip release/
+          (cd release && sha256sum *.zip > SHA256SUMS.txt)
           ls -l release
 
       - name: Publish
@@ -236,5 +275,5 @@ jobs:
           fi
           printf '\nVersion: %s (build %s)\nCommit: %s\nBuild: %s\n\nThe release build is for playing; the debug build stops at the first failed assertion and logs it.\n' \
             "$VERSION" "$NUMBER" "$COMMIT_URL" "$RUN_URL" >> notes.md
-          gh release create "$tag" release/*.zip --target "$GITHUB_SHA" --latest \
+          gh release create "$tag" release/*.zip release/SHA256SUMS.txt --target "$GITHUB_SHA" --latest \
             --title "$VERSION (build $NUMBER)" --notes-file notes.md
