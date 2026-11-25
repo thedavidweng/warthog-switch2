@@ -176,7 +176,7 @@ def map_problems(text: str, flavor: str = None) -> List[str]:
     renderer = "libdrako3dd.a" if flavor == "debug" else "libdrako3d.a"
     if flavor is None:
         if not any(name in text for name in ("libdrako3d.a", "libdrako3dd.a")):
-            problems.append("warthog.elf.map: Drako3D is not linked")
+            problems.append("warthog.elf.map: Drako3D (libdrako3d.a / libdrako3dd.a) is not linked")
     else:
         if renderer not in text:
             problems.append(f"warthog.elf.map: {renderer} is not linked")
