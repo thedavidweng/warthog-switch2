@@ -18,6 +18,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <drako3d.h>
+
+/* __start__ is an absolute linker symbol; take its address PC-relatively so
+ * PIE relocation does not leave an absolute zero in the GOT. */
+static inline uintptr_t warthog_module_base(void)
+{
+	uintptr_t base;
+	__asm__("adrp %0, __start__\n\tadd %0, %0, :lo12:__start__" : "=r"(base));
+	return base;
+}
 
 /* Opens the log, making sdmc:/switch/warthog/logs as needed. False when the
 card is not mounted or the file cannot be written. */
@@ -35,3 +46,5 @@ void warthog_log_sync(void);
 
 /* Syncs and closes. Safe to call when nothing was opened. */
 void warthog_log_close(void);
+
+void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message);
