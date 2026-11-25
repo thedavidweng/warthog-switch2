@@ -49,6 +49,7 @@ unsigned int host_sdl_gamepad_from_id(unsigned int id);
 int host_sdl_gamepad_axis(unsigned int gamepad, int axis);
 int host_sdl_gamepad_button(unsigned int gamepad, int button);
 int host_sdl_gamepad_type(unsigned int gamepad);
+const char *host_sdl_gamepad_name(unsigned int gamepad);
 int host_sdl_rumble_gamepad(unsigned int gamepad, unsigned int low, unsigned int high, unsigned int milliseconds);
 /* callback: void (*)(void *userdata, unsigned int stream, int additional, int total),
 called on the audio thread */
@@ -436,7 +437,7 @@ bool SDL_PushEvent(SDL_Event *event)
 	pthread_mutex_unlock(&event_lock);
 	return ok;
 }
-const char *SDL_GetGamepadName(SDL_Gamepad *pad) { (void)pad; return "Switch 2 Controller"; }
+const char *SDL_GetGamepadName(SDL_Gamepad *pad) { return host_sdl_gamepad_name((unsigned int)(uintptr_t)pad); }
 char *SDL_GetGamepadMapping(SDL_Gamepad *pad) { (void)pad; return NULL; }
 void SDL_CloseGamepad(SDL_Gamepad *pad) { host_sdl_close_gamepad((unsigned int)(uintptr_t)pad); }
 SDL_Keycode SDL_GetKeyFromScancode(SDL_Scancode s, SDL_Keymod m, bool key_event)

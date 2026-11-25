@@ -32,6 +32,11 @@ Android, each request goes to a thread that has one.
 #include "host_switch.h"
 #include "host_ui.h"
 
+#ifdef __SWITCH2__
+#include "../../switch2/host/switch2_input.h"
+static void rumble_stop_pad(int pad);
+#endif
+
 #include <SDL2/SDL.h>
 #include "tomlc17.h"
 #include <switch.h>
@@ -42,6 +47,8 @@ Android, each request goes to a thread that has one.
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
+
+#define RUMBLE_PADS 8
 
 #define HANDLE_COUNT 256
 
@@ -776,9 +783,15 @@ uint32_t host_sdl_gamepad_from_id(uint32_t id)
 void host_sdl_close_gamepad(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
+	SDL_JoystickID pad;
 
 	if (!object)
 		return;
+	pad = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(object));
+#ifdef __SWITCH2__
+	if (pad >= 0 && pad < RUMBLE_PADS)
+		rumble_stop_pad((int)pad);
+#endif
 	pthread_mutex_lock(&handle_lock);
 	handles[gamepad].type = _handle_free;
 	handles[gamepad].object = NULL;
@@ -816,6 +829,10 @@ uint32_t host_sdl_gamepad_vendor(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (object && SDL_GameControllerGetVendor(object) == 0)
+		return 0x057e;
+#endif
 	return object ? SDL_GameControllerGetVendor(object) : 0;
 }
 
@@ -823,8 +840,21 @@ uint32_t host_sdl_gamepad_product(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (object && SDL_GameControllerGetProduct(object) == 0)
+		return 0x2009;
+#endif
 	return object ? SDL_GameControllerGetProduct(object) : 0;
 }
+
+#ifdef __SWITCH2__
+const char *host_sdl_gamepad_name(uint32_t gamepad)
+{
+	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
+	return object && SDL_GameControllerName(object) ?
+		SDL_GameControllerName(object) : "Nintendo Switch Pro Controller";
+}
+#endif
 
 int host_sdl_gamepad_type(uint32_t gamepad)
 {
@@ -833,6 +863,11 @@ int host_sdl_gamepad_type(uint32_t gamepad)
 
 	if (!object)
 		return 0; /* SDL_GAMEPAD_TYPE_UNKNOWN */
+#ifdef __SWITCH2__
+	if (SDL_GameControllerGetType(object) == SDL_CONTROLLER_TYPE_UNKNOWN &&
+		host_sdl_gamepad_vendor(gamepad) == 0x057e)
+		return host_sdl3_gamepad_type(_host_gamepad_switch_pro);
+#endif
 	switch (SDL_GameControllerGetType(object))
 	{
 	case SDL_CONTROLLER_TYPE_XBOXONE: kind = _host_gamepad_xboxone; break;
@@ -864,14 +899,42 @@ The game sends them holding its input lock, which its game thread waits
 for, so the request only notes the motors wanted, and a thread of its own
 makes the calls to HID (one that is slow is logged). */
 
-#define RUMBLE_PADS 8
 #define RUMBLE_LOW_HZ 160.0f
 #define RUMBLE_HIGH_HZ 320.0f
 
 /* SDL pad i is npad No1+i. Pad 0 also reads the handheld, which is how the
 console's own Joy-Cons are seen when they are attached. 1 if it has a style. */
+#ifdef __SWITCH2__
+static struct switch2_controller_slots controller_slots;
+static int controller_slots_ready;
+
+static void controller_slots_refresh(void)
+{
+	int wireless[SWITCH2_NPAD_COUNT];
+	unsigned index;
+
+	for (index = 0; index < SWITCH2_NPAD_COUNT; index++)
+		wireless[index] = hidGetNpadStyleSet(
+			(HidNpadIdType)(HidNpadIdType_No1 + index)) != 0;
+	if (!controller_slots_ready) {
+		switch2_slots_init(&controller_slots);
+		controller_slots_ready = 1;
+	}
+	switch2_slots_update(&controller_slots,
+		hidGetNpadStyleSet(HidNpadIdType_Handheld) != 0, wireless);
+}
+#endif
+
 static int pad_npad(int pad, HidNpadIdType *id, u32 *style)
 {
+#ifdef __SWITCH2__
+	controller_slots_refresh();
+	if (pad == 0) {
+		*id = (HidNpadIdType)switch2_slot_npad(&controller_slots, 0);
+		*style = *id == SWITCH2_NPAD_INVALID ? 0 : hidGetNpadStyleSet(*id);
+		return *style != 0;
+	}
+#endif
 	*id = (HidNpadIdType)(HidNpadIdType_No1 + pad);
 	*style = hidGetNpadStyleSet(*id);
 	if (pad == 0 && !*style && hidGetNpadStyleSet(HidNpadIdType_Handheld))
@@ -991,8 +1054,15 @@ static void *rumble_thread(void *unused)
 		int pad, any = 0;
 
 #ifdef __SWITCH2__
-		if (rumble_stop)
+		if (rumble_stop) {
+			for (pad = 0; pad < RUMBLE_PADS; pad++)
+				if (rumble_pads[pad].count) {
+					pthread_mutex_unlock(&rumble_lock);
+					rumble_send(pad, 0, 0);
+					pthread_mutex_lock(&rumble_lock);
+				}
 			break;
+		}
 #endif
 		for (pad = 0; pad < RUMBLE_PADS; pad++)
 		{
@@ -1017,6 +1087,21 @@ static void *rumble_thread(void *unused)
 	return NULL;
 }
 
+#ifdef __SWITCH2__
+static void rumble_stop_pad(int pad)
+{
+	if (!rumble_thread_started)
+		return;
+	pthread_mutex_lock(&rumble_lock);
+	rumble_pads[pad].wanted_low = 0;
+	rumble_pads[pad].wanted_high = 0;
+	rumble_pads[pad].wanted = 1;
+	rumble_pads[pad].requested = 1;
+	pthread_cond_signal(&rumble_condition);
+	pthread_mutex_unlock(&rumble_lock);
+}
+#endif
+
 int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint32_t milliseconds)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
@@ -1032,6 +1117,7 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 	if (!rumble_thread_started)
 	{
 #ifdef __SWITCH2__
+		rumble_stop = 0;
 		if (pthread_create(&rumble_thread_id, NULL, rumble_thread, NULL) == 0)
 			rumble_thread_started = 1;
 		else
@@ -1048,8 +1134,8 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 	}
 	/* (every request the first time, and after that each change; the
 	thread also readies a pad whose controller changed as it sends) */
-	low &= 0xffff;
-	high &= 0xffff;
+	low = switch2_rumble_level(low);
+	high = switch2_rumble_level(high);
 	if (!rumble_pads[pad].requested || rumble_pads[pad].wanted_low != low || rumble_pads[pad].wanted_high != high)
 	{
 		rumble_pads[pad].requested = 1;
@@ -1119,6 +1205,14 @@ static HidNpadStyleTag gyro_style_tag(u32 style, int *sensors)
 pitch looks up. */
 static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float *yaw, float *pitch)
 {
+#ifdef __SWITCH2__
+	int sensors;
+	HidNpadStyleTag tag = gyro_style_tag(style, &sensors);
+	enum switch2_gyro_orientation orientation = tag == HidNpadStyleTag_NpadJoyRight ? SWITCH2_GYRO_RIGHT :
+		tag == HidNpadStyleTag_NpadJoyLeft ? SWITCH2_GYRO_LEFT : SWITCH2_GYRO_NORMAL;
+	switch2_gyro_add(orientation, !!(state->attributes & HidSixAxisSensorAttribute_IsConnected),
+		state->angular_velocity.x, state->angular_velocity.y, state->delta_time, yaw, pitch);
+#else
 	float x = state->angular_velocity.x;
 	float y = state->angular_velocity.y;
 	float seconds;
@@ -1152,6 +1246,7 @@ static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float
 		*yaw += -y * seconds;
 		*pitch += -x * seconds;
 	}
+#endif
 }
 
 static void gyro_ready(int pad)
