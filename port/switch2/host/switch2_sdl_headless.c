@@ -219,6 +219,7 @@ bool SDL_RemovePath(const char *path)
 }
 
 /* whether the path is there, and what it is */
+#ifndef HALO_SWITCH2_GRAPHICAL
 bool SDL_GetPathInfo(const char *path, SDL_PathInfo *info)
 {
 	struct stat status;
@@ -240,6 +241,7 @@ bool SDL_GetPathInfo(const char *path, SDL_PathInfo *info)
 	}
 	return true;
 }
+#endif
 
 /* the executable's folder, with a / after it */
 const char *SDL_GetBasePath(void)
@@ -317,6 +319,7 @@ bool SDL_CreateDirectory(const char *path)
 	return true;
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 char **SDL_GlobDirectory(const char *path, const char *pattern, SDL_GlobFlags flags, int *count)
 {
     DIR *dir = opendir(path); struct dirent *entry; size_t used = 0, bytes = sizeof(char *); char **tmp = NULL, **result; char *text;
@@ -326,6 +329,7 @@ char **SDL_GlobDirectory(const char *path, const char *pattern, SDL_GlobFlags fl
     result=malloc(bytes); if (result) { text=(char *)(result+used+1); for (size_t i=0;i<used;i++) { result[i]=text; strcpy(text,tmp[i]); text+=strlen(text)+1; } result[used]=NULL; if (count) *count=(int)used; }
     for (size_t i=0;i<used;i++) free(tmp[i]); free(tmp); return result;
 }
+#endif
 
 /* ---------- no devices */
 
@@ -342,6 +346,7 @@ bool SDL_GL_ExtensionSupported(const char *extension)
 	return false;
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 SDL_AudioDeviceID *SDL_GetAudioPlaybackDevices(int *count)
 {
 	if (count)
@@ -349,17 +354,22 @@ SDL_AudioDeviceID *SDL_GetAudioPlaybackDevices(int *count)
 	headless_set_error("the server plays no sound");
 	return NULL;
 }
+#endif
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 const char *SDL_GetAudioDeviceName(SDL_AudioDeviceID device)
 {
 	(void)device;
 	return NULL;
 }
+#endif
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 void SDL_DestroyAudioStream(SDL_AudioStream *stream)
 {
 	(void)stream;
 }
+#endif
 
 /* (milliseconds since the server started, as SDL counts them) */
 Uint64 SDL_GetTicks(void)
@@ -374,11 +384,13 @@ Uint64 SDL_GetTicks(void)
 		(now.tv_nsec - start.tv_nsec) / 1000000);
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 SDL_AudioDeviceID SDL_GetAudioStreamDevice(SDL_AudioStream *stream)
 {
 	(void)stream;
 	return 0;
 }
+#endif
 
 bool SDL_GetAudioDeviceFormat(SDL_AudioDeviceID device, SDL_AudioSpec *specification, int *sample_frames)
 {
@@ -389,6 +401,7 @@ bool SDL_GetAudioDeviceFormat(SDL_AudioDeviceID device, SDL_AudioSpec *specifica
 	return false;
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID device, const SDL_AudioSpec *specification,
 	SDL_AudioStreamCallback callback, void *userdata)
 {
@@ -399,13 +412,17 @@ SDL_AudioStream *SDL_OpenAudioDeviceStream(SDL_AudioDeviceID device, const SDL_A
 	headless_set_error("the server plays no sound");
 	return NULL;
 }
+#endif
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream)
 {
 	(void)stream;
 	return false;
 }
+#endif
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buffer, int length)
 {
 	(void)stream;
@@ -413,6 +430,7 @@ bool SDL_PutAudioStreamData(SDL_AudioStream *stream, const void *buffer, int len
 	(void)length;
 	return false;
 }
+#endif
 
 Uint64 SDL_GetPerformanceCounter(void) { return armGetSystemTick(); }
 Uint64 SDL_GetPerformanceFrequency(void) { return armGetSystemTickFreq(); }

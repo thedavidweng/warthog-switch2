@@ -34,7 +34,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "warthog_log.h"
 #include "headless_engine.h"
 #include "switch2_gamedata.h"
+#include "switch2_mman.h"
+#include "nx2_platform.h"
 #include "switch2_update.h"
+
+extern int halo_main(void);
+void host_dk_shutdown(void);
+void host_sdl_quit(void);
+void platform_xbox_memory_reset_for_shutdown(void);
+void xbox_heap_reset_for_shutdown(void);
 
 /* What port/switch2/build.py generates from UPSTREAM.json: the build's
 flavor and version and the pins it was made from, so a log from a console
@@ -43,16 +51,6 @@ says exactly which build wrote it */
 
 typedef int (*https_body_fn)(void *, const void *, size_t, long long);
 int host_https_get(const char *, int, https_body_fn, void *, char *, size_t, char *, size_t);
-
-void host_logf(int priority, const char *format, ...)
-{
-	char message[512];
-	va_list args;
-	va_start(args, format);
-	vsnprintf(message, sizeof(message), format, args);
-	va_end(args);
-	warthog_log(priority >= 5 ? "WARN" : "INFO", "%s", message);
-}
 
 struct update_download { uint8_t *data; size_t size; };
 
@@ -283,11 +281,12 @@ int main(int argc, char **argv)
 	log_renderer();
 	log_shader_runtime();
 	const char *trigger = "sdmc:/switch/warthog/trigger_fault.txt";
-	bool cpu_test = false, gpu_test = false;
+	bool cpu_test = false, gpu_test = false, headless_check = false;
 	for (int i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--self-test-cpu-fault")) cpu_test = true;
 		if (!strcmp(argv[i], "--self-test-gpu-fault")) gpu_test = true;
+		if (!strcmp(argv[i], "--headless-check")) headless_check = true;
 	}
 	if (access(trigger, F_OK) == 0)
 	{
@@ -309,7 +308,29 @@ int main(int argc, char **argv)
 		warthog_log_console(status == SWITCH2_GAMEDATA_OK ? "INFO" : "ERROR", "%s", message);
 		consoleUpdate(NULL);
 		if (status == SWITCH2_GAMEDATA_OK)
+		{
+			char path[1024];
+			const char *root = getenv("HALO_DATA_ROOT");
+			if (!root || !*root) root = "sdmc:/switch/warthog";
+			int length = snprintf(path, sizeof(path), "%s/maps/ui.map", root);
+			if (!headless_check && length > 0 && (size_t)length < sizeof(path) && access(path, R_OK) == 0)
+			{
+				warthog_log("INFO", "maps/ui.map ready; releasing console and entering Halo main menu via Drako3D");
+				warthog_log_sync();
+				consoleExit(NULL);
+				halo_main();
+				host_dk_shutdown();
+				host_sdl_quit();
+				switch2PlatformRestoreClock();
+				nx2ExitCleanupNow();
+				platform_xbox_memory_reset_for_shutdown();
+				xbox_heap_reset_for_shutdown();
+				switch2_mman_shutdown();
+				warthog_log_close();
+				return 0;
+			}
 			warthog_log("INFO", "headless engine status: %d", warthog_headless_engine_run());
+		}
 		else
 		{
 			printf("Press + to return to the homebrew menu.\n");

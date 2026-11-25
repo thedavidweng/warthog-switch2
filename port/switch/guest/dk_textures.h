@@ -25,7 +25,7 @@ finest levels, and a texel's diagonal more for its filtering; -1 if it is not
 known (a texture not a 3D one, compressed, or not yet sent). The texture is
 found by its texels' address. The dynamic lights' distance attenuation is a
 ball in its box: their passes let the pixels past it go (d3d8_dk.c). */
-float dk_texture_reach(unsigned long address);
+float dk_texture_reach(uintptr_t address);
 
 /* d3d8_dk.c: room for a command in the stream (dk_commands.h), its header
 filled in */

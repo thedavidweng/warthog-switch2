@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define HALO_VERSION "dev"
+#ifndef HALO_SWITCH2_GRAPHICAL
 static int stop_requested;
 BOOL platform_sdl_initialize(void)
 {
@@ -124,12 +125,14 @@ void platform_show_message(const char *title, const char *message)
 {
 	platform_log("%s: %s", title, message);
 }
+#endif
 
 void platform_open_url(const char *url)
 {
 	(void)url;
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 void platform_request_quit(void)
 {
 	stop_requested = 1;
@@ -189,6 +192,7 @@ void platform_pump_events(void)
 {
 	(void)stop_requested;
 }
+#endif
 
 /* ---------- the version (updater.c's, which the server leaves out: it
 updates as its deployment does, server/README.md) */
@@ -221,6 +225,7 @@ xinput_sdl.c does.
 #include <stdio.h>
 #include <string.h>
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 #define PORT_COUNT 4
 
 XPP_DEVICE_TYPE XDEVICE_TYPE_GAMEPAD_TABLE;
@@ -454,6 +459,7 @@ DWORD WINAPI XInputDebugGetKeystroke(PXINPUT_DEBUG_KEYSTROKE keystroke)
 	memset(keystroke, 0, sizeof(*keystroke));
 	return ERROR_HANDLE_EOF;
 }
+#endif
 
 /*
 GAME_CONSOLE_GAPS.C
@@ -612,6 +618,7 @@ unsigned long memory_watch_serial(void) { return mw_serial; }
 void memory_watch_prepare_write(void *address, unsigned long size) { (void)address; (void)size; ++mw_serial; }
 void memory_watch_forget(void *address, unsigned long size) { (void)address; (void)size; ++mw_serial; }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 unsigned char halo_screen_fast_warp(void) { return 0; }
 unsigned char halo_screen_fast_blur(void) { return 0; }
 void halo_screen_warp_blend(unsigned char on) { (void)on; }
@@ -623,6 +630,7 @@ void dk_hud_prepare(const long *assets, long count) { (void)assets; (void)count;
 void dk_hud_forget(void) {}
 int halo_linux_gyro_look(short index, float *yaw, float *pitch) { (void)index; *yaw = *pitch = 0; return 0; }
 int halo_linux_gyro_zoom_only(void) { return 0; }
+#endif
 int updater_install_status(char *line, int size) { if (size > 0 && line) line[0] = 0; return 0; }
 int updater_ready(char *latest, int size) { if (size > 0 && latest) latest[0] = 0; return 0; }
 const char *updater_install_amount(char *text, int size) { if (size > 0) text[0] = 0; return text; }

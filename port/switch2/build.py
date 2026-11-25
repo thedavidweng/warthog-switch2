@@ -212,6 +212,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         f"-isystem {_quote(libounce / 'include')}",
         f"-I{_quote(HOST_DIR)}",
         f"-I{_quote(BUILD)}",
+        f"-I{_quote(port.game / 'port/android/include')}",
+        f"-I{_quote(port.game / 'port/third_party/zlib')}",
         f"-I{_quote(Path.cwd() / 'chupathingyce/port/third_party/tomlc17')}",
     ])
     library_paths = " ".join(f"-L{_quote(path)}" for path in
@@ -258,11 +260,40 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         depfile="$out.d",
         deps="gcc",
     )
+    sdl2_archive = devkitpro / "portlibs/switch/lib/libSDL2.a"
+    sdl2_host = BUILD / "libSDL2_host.a"
+    sdl2_symbols = BUILD / "sdl2_redefine.syms"
+    bin_dir = devkitpro / "devkitA64/bin"
+    n.rule(
+        name="switch2_sdl2_namespace",
+        command=(f"$python {PORT_DIR / 'sdl2_namespace.py'} "
+                 f"--nm {bin_dir / 'aarch64-none-elf-nm'} "
+                 f"--objcopy {bin_dir / 'aarch64-none-elf-objcopy'} "
+                 f"--archive {sdl2_archive} --symbols {sdl2_symbols} --output {sdl2_host}"),
+        description="SWITCH2 NAMESPACE SDL2",
+    )
+    n.build(outputs=[sdl2_host, sdl2_symbols], rule="switch2_sdl2_namespace",
+            inputs=sdl2_archive, implicit=[PORT_DIR / "sdl2_namespace.py"])
+    sdl2_source = PORT_DIR.parent / "switch/host/host_sdl2.c"
+    sdl2_raw = BUILD / "host/host_sdl2.raw.o"
+    sdl2_object = BUILD / "host/host_sdl2.c.o"
+    n.build(outputs=sdl2_raw, rule="switch2_cc", inputs=sdl2_source,
+            variables={"cflags": f"{code_flags} {includes} -ffunction-sections -fdata-sections "
+                       f"-I{port.game / 'port/third_party/tomlc17'}"})
+    n.rule(name="switch2_sdl2_object",
+           command=f"{bin_dir / 'aarch64-none-elf-objcopy'} --redefine-syms={sdl2_symbols} $in $out",
+           description="SWITCH2 NAMESPACE $out")
+    n.build(outputs=sdl2_object, rule="switch2_sdl2_object", inputs=sdl2_raw,
+            implicit=[sdl2_symbols])
+    sdl_events = BUILD / "host/host_sdl3_events.c.o"
+    n.build(outputs=sdl_events, rule="switch2_cc",
+            inputs=PORT_DIR.parent / "switch/host/host_sdl3_events.c",
+            variables={"cflags": f"{code_flags} {includes} -I{BUILD / 'third_party/SDL3/include'}"})
     objects = []
     for source in sorted((HOST_DIR).glob("*.c")):
         if source.name in {
             "switch2_tls.c", "switch2_net.c", "switch2_headless_platform.c", "switch2_sdl_headless.c",
-            "switch2_posix_compat.c", "headless_engine.c"
+            "switch2_posix_compat.c", "headless_engine.c", "switch2_sdl3_bridge.c"
         }:
             continue
         obj = BUILD / "host" / (source.name + ".o")
@@ -271,6 +302,21 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                 variables={"cflags": f"{code_flags} {includes}"})
         objects.append(obj)
 
+    sdl_bridge = BUILD / "host/switch2_sdl3_bridge.c.o"
+    n.build(outputs=sdl_bridge, rule="switch2_cc", inputs=HOST_DIR / "switch2_sdl3_bridge.c",
+            variables={"cflags": f"{code_flags} {includes} -I{BUILD / 'third_party/SDL3/include'} "
+                       "-ffunction-sections -fdata-sections"})
+    objects.extend([sdl2_object, sdl_events, sdl_bridge])
+
+    # Ampere binaries must never share Maxwell's shader-cache namespace.
+    uam_commit = record["dependencies"]["uam2"]["commit"][:12]
+    renderer_flags = f"{code_flags} {includes} -DHOST_DK_UAM_COMMIT='\"ampere-{uam_commit}\"'"
+    for name in ("host_dk.c", "host_dk_shaders.c", "host_dk_hud.c"):
+        source = PORT_DIR.parent / "switch/host" / name
+        obj = BUILD / "host" / (name + ".o")
+        n.build(outputs=obj, rule="switch2_cc", inputs=source,
+                variables={"cflags": renderer_flags})
+        objects.append(obj)
     https_source = Path.cwd() / "port/switch/host/host_https.c"
     https_obj = BUILD / "host" / "host_https.c.o"
     n.build(outputs=https_obj, rule="switch2_cc", inputs=https_source,
@@ -289,6 +335,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release)
     platform_archive = BUILD / "libwarthog_platform.a"
     n.build(outputs=platform_archive, rule="switch2_ar", inputs=platform_objects)
+    n.build(outputs="switch2-engine-platform", rule="phony", inputs=platform_archive)
 
     elf = BUILD / "warthog.elf"
     n.rule(
@@ -306,14 +353,18 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         name="switch2_engine_link",
         command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out "
                  f"{' '.join(str(obj) for obj in objects)} -Wl,--start-group "
-                 f"{game_archive} {platform_archive} -Wl,--end-group {library_paths} "
+                 f"{game_archive} {platform_archive} {sdl2_host} -Wl,--end-group {library_paths} "
                  + " ".join(f"-l{library}" for library in libraries)
                  + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
                  " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
+                 " -Wl,-u,host_dk_submit -Wl,-u,host_dk_output_height"
+                 " -Wl,-u,host_dk_shader_find -Wl,-u,host_dk_compile_glsl"
+                 " -Wl,--gc-sections -Wl,--wrap=sdl2_host_SDL_VideoInit"
+                 " -Wl,--wrap=sdl2_host_SDL_VideoQuit"
                  " -Wl,--wrap=hidInitializeTouchScreen -lstdc++ -Wl,-Map,$out.map"),
         description="SWITCH2 ENGINE LINK $out",
     )
-    n.build(outputs=elf, rule="switch2_engine_link", inputs=[*objects, game_archive, platform_archive])
+    n.build(outputs=elf, rule="switch2_engine_link", inputs=[*objects, game_archive, platform_archive, sdl2_host])
 
     # ---------- the card's metadata: NACP and icon
 

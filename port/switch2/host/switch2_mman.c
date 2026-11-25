@@ -189,3 +189,18 @@ void switch2_mman_shutdown(void)
 }
 size_t switch2_mman_committed_bytes(void) { pthread_mutex_lock(&lock); size_t n = committed; pthread_mutex_unlock(&lock); return n; }
 size_t switch2_mman_run_count(void) { pthread_mutex_lock(&lock); size_t n = run_count; pthread_mutex_unlock(&lock); return n; }
+void *switch2_mman_heap_backing(uintptr_t address, size_t size)
+{
+    void *backing = NULL;
+    pthread_mutex_lock(&lock);
+    for (size_t i = 0; size && i < run_count; i++) {
+        struct mapped_run *run = &runs[i];
+        if (address >= run->va && address - run->va < run->size &&
+            size <= run->size - (address - run->va)) {
+            backing = (char *)run->backing + (address - run->va);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return backing;
+}

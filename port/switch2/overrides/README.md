@@ -9,6 +9,12 @@ override must be listed below with its purpose and upstream destination.
 Uses GCC AArch64 register instructions for the Switch 2 floating-point control
 word. This can be proposed upstream for GCC AArch64 builds.
 
+## port/linux/src/sdl_platform.c
+
+Omits the POSIX signal watchdog on Switch 2, whose Newlib signal API lacks
+the required sigaction fields, and skips OpenGL function loading for the
+Drako3D renderer. This can be proposed upstream for the port.
+
 ## port/linux/src/d3d8_resources.c
 
 Uses a 32-bit format argument after the LP64 source rewrite. This can be

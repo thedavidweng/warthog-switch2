@@ -58,7 +58,8 @@ static struct
 {
 	int state;
 	/* the guest's: its PNG and its tag's name */
-	uint32_t png, png_size, tag;
+	dk_addr_t png, tag;
+	uint32_t png_size;
 	struct host_dk_hud_levels levels;
 	/* (let go while being decoded: dropped when done) */
 	int forgotten;
@@ -74,6 +75,10 @@ static struct
 	long head, count;
 } asked, ahead;
 static int thread_started;
+#ifdef __SWITCH2__
+static int thread_stop;
+static pthread_t sheet_thread_id;
+#endif
 /* the bytes the ready sheets hold, and the most they have */
 static uint64_t held_bytes, held_most;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -240,14 +245,26 @@ static void *sheet_thread(void *unused)
 	for (;;)
 	{
 		struct host_dk_hud_levels levels;
-		uint32_t png, png_size, tag;
+		dk_addr_t png, tag;
+		uint32_t png_size;
 		uint64_t start;
 		long asset;
 		int decoded;
 
 		pthread_mutex_lock(&lock);
-		while (!asked.count && !ahead.count)
+		while (!asked.count && !ahead.count
+#ifdef __SWITCH2__
+			&& !thread_stop
+#endif
+		)
 			pthread_cond_wait(&work, &lock);
+#ifdef __SWITCH2__
+		if (thread_stop)
+		{
+			pthread_mutex_unlock(&lock);
+			break;
+		}
+#endif
 		if (asked.count)
 		{
 			asset = asked.assets[asked.head];
@@ -305,16 +322,19 @@ static void *sheet_thread(void *unused)
 }
 
 /* (under lock) */
-static void sheet_queue(uint32_t asset, uint32_t png, uint32_t png_size, uint32_t tag, int demand)
+static void sheet_queue(uint32_t asset, dk_addr_t png, uint32_t png_size, dk_addr_t tag, int demand)
 {
 	if (!thread_started)
 	{
+#ifdef __SWITCH2__
+		thread_started = pthread_create(&sheet_thread_id, NULL, sheet_thread, NULL) == 0 ? 1 : -1;
+#else
 		pthread_t thread;
-
 		thread_started = pthread_create(&thread, NULL, sheet_thread, NULL) == 0 ? 1 : -1;
 		if (thread_started > 0)
 			pthread_detach(thread);
-		else
+#endif
+		if (thread_started < 0)
 			host_logf(HOST_LOG_ERROR, "deko3d: high-res hud: no thread to decode the sheets on; drawn as they are");
 	}
 	if (thread_started < 0)
@@ -341,9 +361,23 @@ static void sheet_queue(uint32_t asset, uint32_t png, uint32_t png_size, uint32_
 	pthread_cond_signal(&work);
 }
 
+#ifdef __SWITCH2__
+void host_dk_hud_shutdown(void)
+{
+	pthread_mutex_lock(&lock);
+	thread_stop = 1;
+	pthread_cond_signal(&work);
+	pthread_mutex_unlock(&lock);
+	if (thread_started > 0)
+		pthread_join(sheet_thread_id, NULL);
+	host_dk_hud_forget();
+	thread_started = 0;
+}
+#endif
+
 /* the bytes a sheet's levels will take, from its PNG's header (0 if it
 has none) */
-static uint64_t sheet_bytes(uint32_t png, uint32_t png_size)
+static uint64_t sheet_bytes(dk_addr_t png, uint32_t png_size)
 {
 	const unsigned char *data = (const unsigned char *)(uintptr_t)png;
 	uint32_t width, height, level = 0;
@@ -438,7 +472,7 @@ void host_dk_hud_forget(void)
 			"held at most)", (unsigned)ready, let_go / 1048576.0, held_most / 1048576.0);
 }
 
-int host_dk_hud_ready(unsigned int asset, unsigned int png, unsigned int png_size, unsigned int tag)
+int host_dk_hud_ready(unsigned int asset, dk_addr_t png, unsigned int png_size, dk_addr_t tag)
 {
 	int answer;
 

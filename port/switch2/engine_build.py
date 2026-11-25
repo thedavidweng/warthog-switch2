@@ -12,6 +12,8 @@ from tools.linux_build import EXPAT_SOURCES, ZLIB_SOURCES, ZLIB_DEFINES, updater
 from tools.version import VERSION_SOURCES
 from tools.server_build import SDL_TARBALL_SHA256, SDL_TARBALL_URL, SDL_VERSION
 
+OPENGL_ONLY = {"d3d8_gl.c", "xbox_textures.c", "xgpu_post.c", "xgpu_shader_cache.c", "ui_overlay.c"}
+
 
 def fetch_sdl_headers(build):
     """Fetch the server's pinned SDL headers for the headless platform."""
@@ -155,7 +157,7 @@ def platform_objects(n, port, build, code_flags, includes, release):
            " -fwrapv -fno-delete-null-pointer-checks -fno-omit-frame-pointer -ffp-contract=off")
     warnings = " ".join(f"-Werror={w}" for w in ("incompatible-pointer-types", "int-to-pointer-cast",
                         "pointer-to-int-cast", "int-conversion", "implicit-function-declaration", "format"))
-    platform = " ".join([base, abi, warnings, "-Wno-error=format-truncation",
+    platform = " ".join([base, abi, warnings, "-ffunction-sections", "-fdata-sections", "-Wno-error=format-truncation",
         f"-include {rewritten / 'port/linux/include/halo_linux_prefix.h'}",
         f"-include {build / 'platform_msvc_semantics.h'}",
         f"-I{rewritten / 'port/linux/src'}", f"-I{rewritten / 'port/linux/include'}",
@@ -171,13 +173,13 @@ def platform_objects(n, port, build, code_flags, includes, release):
             f" -include {port.root / 'host/switch2_upnp_names.h'}")
     objects = []
 
-    def add(source, flags, name):
+    def add(source, flags, name, dependencies=()):
         obj = build / "platform" / name.with_suffix(".o")
         n.build(obj, "switch2_cc", source, implicit=[build / "platform_msvc_semantics.h"],
-                order_only=[build / "lp64.stamp"], variables={"cflags": flags})
+                order_only=[build / "lp64.stamp", *dependencies], variables={"cflags": flags})
         objects.append(obj)
 
-    excluded = {"updater.c", "launcher.c", "voice.c", "memory_watch.c", "sdl_platform.c", "xinput_sdl.c"}
+    excluded = {"updater.c", "launcher.c", "voice.c", "memory_watch.c"} | OPENGL_ONLY
     posix = {"posix_files.c", "posix_threads.c", "posix_time.c", "posix_browser.c", "posix_upnp.c", "posix_ui_font.c"}
     for source in sorted(src.glob("*.c")):
         name = source.name
@@ -191,12 +193,26 @@ def platform_objects(n, port, build, code_flags, includes, release):
             extra = updater_defines(release) if name in VERSION_SOURCES else \
                     f"-idirafter {src}" if name == "text_hires.c" else ""
             add(rewritten / source.relative_to(game), f"{platform} {extra}", source.relative_to(game))
+    guest = port.root.parent / "switch/guest"
+    guest_headers = []
+    for source in sorted(guest.glob("*.h")):
+        output = rewritten / "switch_guest" / source.name
+        n.build(output, "switch2_lp64", source,
+                implicit=["tools/switch2_lp64_rewrite.py", game / "tools/lp64_rewrite.py"])
+        guest_headers.append(output)
+    for name in ("d3d8_dk.c", "dk_shaders.c", "nv2a_psh_dk.c", "nv2a_vsh_dk.c",
+                 "ui_overlay_dk.c", "xbox_textures_dk.c", "guest_sdl_switch.c"):
+        generated = rewritten / "switch_guest" / name
+        n.build(generated, "switch2_lp64", guest / name,
+                implicit=["tools/switch2_lp64_rewrite.py", game / "tools/lp64_rewrite.py"])
+        add(generated, f"{platform} -I{rewritten / 'switch_guest'}", Path("switch_guest") / name,
+            guest_headers)
     add(build / "generated/hud_hires_assets.c", platform, Path("generated/hud_hires_assets.c"))
     bridge = port.root / "host/switch2_headless_platform.c"
     bridge_rewritten = build / "lp64/switch2_headless_platform.c"
     n.build(bridge_rewritten, "switch2_lp64", bridge,
             implicit=["tools/switch2_lp64_rewrite.py", game / "tools/lp64_rewrite.py"])
-    add(bridge_rewritten, platform, Path("bridge/switch2_headless_platform.c"))
+    add(bridge_rewritten, f"{platform} -DHALO_SWITCH2_GRAPHICAL", Path("bridge/switch2_headless_platform.c"))
     runner = port.root / "host/headless_engine.c"
     runner_rewritten = build / "lp64/headless_engine.c"
     n.build(runner_rewritten, "switch2_lp64", runner,
@@ -206,7 +222,7 @@ def platform_objects(n, port, build, code_flags, includes, release):
         Path("bridge/headless_engine.c"))
     for name, extra in (("switch2_tls.c", tls), ("switch2_net.c", ""), ("switch2_sdl_headless.c", ""),
                         ("switch2_posix_compat.c", "")):
-        add(port.root / "host" / name, f"{extra} {native}", Path("bridge") / name)
+        add(port.root / "host" / name, f"{extra} {native} -DHALO_SWITCH2_GRAPHICAL", Path("bridge") / name)
     for name in ("tomlc17/tomlc17.c", "kcp/ikcp.c"):
         add(rewritten / "port/third_party" / name, base + abi, Path("third_party") / name)
     for name in EXPAT_SOURCES:
