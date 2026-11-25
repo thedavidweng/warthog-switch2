@@ -42,6 +42,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 extern int halo_main(void);
 void host_dk_shutdown(void);
+void host_debug_shutdown(void);
 void host_sdl_quit(void);
 void platform_xbox_memory_reset_for_shutdown(void);
 void xbox_heap_reset_for_shutdown(void);

@@ -29,9 +29,10 @@ Without a Switch 2 devkitPro (libounce, Drako3D, the UAM2 runtime) and the
 is missing and `ninja switch` still configures. `--devkitpro DIR` selects an
 install other than `DEVKITPRO`, `/opt/devkitpro` or `~/devkitpro`.
 
-A `--release` build differs from a debug build in optimisation and in the
-asserts, and in nothing else: both keep `.debug_info` and `.symtab`, so a
-release's crash is symbolized against the symbols published beside it.
+A `--release` build also disables development-only profiling and benchmark
+hooks with `WARTHOG_DEV_PROFILING=0`; both flavors keep `.debug_info` and
+`.symtab`, so a release's crash is symbolized against the symbols published
+beside it.
 
 ## The toolchain
 

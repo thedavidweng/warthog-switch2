@@ -195,6 +195,9 @@ static struct
 	int is_game[MAXIMUM_THREADS];
 	unsigned hz;
 	char image[64];
+	pthread_t thread;
+	int running;
+	int stop;
 } profile;
 
 /* ---------- the slow frames' own profiles
@@ -437,6 +440,8 @@ static void *profile_thread(void *unused)
 		int slot;
 
 		svcSleepThread((s64)interval);
+		if (__atomic_load_n(&profile.stop, __ATOMIC_ACQUIRE))
+			break;
 		pthread_mutex_lock(&threads_lock);
 		for (slot = 0; slot < MAXIMUM_THREADS; slot++)
 		{
@@ -454,6 +459,10 @@ static void *profile_thread(void *unused)
 				profile.is_game[slot] = guest_threads[slot].is_game;
 			}
 			/* (paused: nothing below takes a lock or allocates) */
+			#ifdef __SWITCH2__
+			if (!envIsSyscallHinted(0x32) || !envIsSyscallHinted(0x33))
+				continue;
+			#endif
 			result = svcSetThreadActivity(handle, ThreadActivity_Paused);
 			if (R_SUCCEEDED(result))
 			{
@@ -507,8 +516,6 @@ static void *profile_thread(void *unused)
 
 void host_debug_start_profiler(unsigned hz, const char *image)
 {
-	pthread_t thread;
-
 	if (!hz)
 		return;
 	if (hz > 2000)
@@ -520,15 +527,31 @@ void host_debug_start_profiler(unsigned hz, const char *image)
 		return;
 	}
 	profile.hz = hz;
+	profile.stop = 0;
 	/* (without it, the windows only) */
 	spike.ring = calloc(SPIKE_RING, sizeof(*spike.ring));
 	snprintf(profile.image, sizeof(profile.image), "%s", image);
-	if (pthread_create(&thread, NULL, profile_thread, NULL) != 0)
+	if (pthread_create(&profile.thread, NULL, profile_thread, NULL) != 0)
 	{
+		free(profile.entries);
+		profile.entries = NULL;
 		host_logf(HOST_LOG_WARN, "profiler: cannot start its thread");
 		return;
 	}
-	pthread_detach(thread);
+	profile.running = 1;
 	host_logf(HOST_LOG_WARN, "profiler: sampling the guest's threads %u times a second; a file every %d s in "
 		"%s/profile (tools/switch_profile.py reads them)", hz, PROFILE_WINDOW_SECONDS, host_executable_root());
+}
+
+void host_debug_shutdown(void)
+{
+	if (!profile.running)
+		return;
+	__atomic_store_n(&profile.stop, 1, __ATOMIC_RELEASE);
+	pthread_join(profile.thread, NULL);
+	free(profile.entries);
+	free(spike.ring);
+	profile.entries = NULL;
+	spike.ring = NULL;
+	profile.running = 0;
 }

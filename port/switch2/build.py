@@ -224,7 +224,9 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     # asserts, and in nothing else: both keep .debug_info and .symtab, so a
     # release's crash is symbolized against the symbols published beside it.
     optimization = "-O2 -DNDEBUG" if release else "-O0"
-    code_flags = f"{CPU_FLAGS} {PLATFORM_DEFINES} -g {optimization} -fno-omit-frame-pointer"
+    profiling = 0 if release else 1
+    code_flags = (f"{CPU_FLAGS} {PLATFORM_DEFINES} -DWARTHOG_DEV_PROFILING={profiling} "
+                  f"-g {optimization} -fno-omit-frame-pointer")
 
     # ---------- the build's own header, from UPSTREAM.json
 

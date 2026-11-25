@@ -26,6 +26,9 @@ profile of another build names the wrong functions, and nothing can tell.
 
 import argparse
 import ftplib
+import json
+import io
+import os
 import re
 import subprocess
 import sys
@@ -41,24 +44,64 @@ DEFAULT_PORT = 5000
 REMOTE = "/switch/ChupaThingyCE/profile"
 
 
-def fetch(host, port, windows, prefix="profile"):
-    LOCAL.mkdir(parents=True, exist_ok=True)
+def summarize_perf(data):
+    scenes = defaultdict(dict)
+    for run in data["runs"]:
+        scenes[run["scene"]][run["mode"]] = run
+        print(f"{run['scene']} ({run['mode']}), refresh {run['refresh_hz']} Hz")
+        for label, key in (("CPU", "cpu_ms"), ("GPU", "gpu_ms")):
+            print(f"  {label} ms: " + ", ".join(f"{name} {value:.3f}"
+                  for name, value in run[key].items()))
+        print(f"  waits us: submit {run['submit_wait_us']}, acquire max {run['acquire_max_us']}, "
+              f"fence max {run['fence_max_us']}")
+        shader = run["shader"]
+        print(f"  UAM2: {shader['count']} compiles, total {shader['total_ms']:.3f} ms, "
+              f"mean {shader['mean_ms']:.3f} ms, max {shader['max_ms']:.3f} ms")
+        print(f"  map load {run['map_load_ms']:.3f} ms, peak memory {run['memory_peak_bytes']} bytes")
+    for scene, modes in scenes.items():
+        if "Normal" not in modes or "FastLoad" not in modes:
+            continue
+        for key, label in (("cpu_ms", "CPU"), ("gpu_ms", "GPU")):
+            normal = modes["Normal"][key]["mean"]
+            fast = modes["FastLoad"][key]["mean"]
+            if normal:
+                print(f"{scene} FastLoad vs Normal {label} mean: {(fast - normal) / normal * 100:+.1f}%")
+
+
+def fetch(host, port, windows, prefix="profile", remote=REMOTE, local=LOCAL):
+    local.mkdir(parents=True, exist_ok=True)
     ftp = ftplib.FTP()
     ftp.connect(host, port, timeout=10)
     ftp.login()
-    names = sorted(name.rsplit("/", 1)[-1] for name in ftp.nlst(REMOTE))
+    names = sorted(name.rsplit("/", 1)[-1] for name in ftp.nlst(remote))
     names = [name for name in names if re.match(prefix + r"_\d+\.txt$", name)]
     if windows:
         names = [name for name in names if int(name[len(prefix) + 1:len(prefix) + 4]) in windows]
     paths = []
     for name in names:
-        path = LOCAL / name
+        path = local / name
         with open(path, "wb") as out:
-            ftp.retrbinary(f"RETR {REMOTE}/{name}", out.write)
+            ftp.retrbinary(f"RETR {remote}/{name}", out.write)
         paths.append(path)
     ftp.quit()
-    print(f"fetched {len(paths)} profile(s) to {LOCAL}", file=sys.stderr)
+    print(f"fetched {len(paths)} profile(s) to {local}", file=sys.stderr)
     return paths
+
+
+def fetch_perf(host, port):
+    ftp = ftplib.FTP()
+    ftp.connect(host, port, timeout=10)
+    ftp.login()
+    contents = io.BytesIO()
+    try:
+        ftp.retrbinary("RETR /switch/warthog/logs/perf_report.json", contents.write)
+    except ftplib.error_perm as error:
+        if not str(error).startswith("550"):
+            raise
+        return None
+    finally:
+        ftp.quit()
+    return json.loads(contents.getvalue())
 
 
 def parse(path):
@@ -125,25 +168,43 @@ def symbolize(elf, addresses):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--target", choices=("switch", "switch2"), default="switch")
     parser.add_argument("files", nargs="*", help="profile files, or window numbers with --fetch")
     parser.add_argument("--fetch", action="store_true", help="pull the profiles off the console first")
-    parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--thread", default="game", help="game (default), all, or a thread slot number")
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--folded", type=Path, help="also write collapsed stacks here")
     parser.add_argument("--spikes", action="store_true", help="the slow frames' files (spike_NNN.txt), each alone")
-    parser.add_argument("--images", type=Path, default=BUILD,
+    parser.add_argument("--images", type=Path,
                         help="the folder of the images the console ran (halo_guest.elf, and halo.elf for the host's "
                              "names): build/switch by default; a release's unzipped folder for a player's profile "
                              "(without its halo.elf, which a release does not carry, the host's frames are addresses)")
     args = parser.parse_args()
+    args.images = args.images or (ROOT / "build" / args.target)
+    if args.target == "switch2":
+        args.host = args.host or os.environ.get("WARTHOG_SWITCH2_HOST")
+        args.port = args.port or int(os.environ.get("WARTHOG_SWITCH2_PORT", DEFAULT_PORT))
+        local = Path("/tmp/warthog-switch2-logs/profile")
+        remote = "/switch/warthog/logs/profile"
+        if args.fetch and not args.host:
+            parser.error("set WARTHOG_SWITCH2_HOST or pass --host")
+    else:
+        args.host = args.host or DEFAULT_HOST
+        args.port = args.port or DEFAULT_PORT
+        local, remote = LOCAL, REMOTE
 
     prefix = "spike" if args.spikes else "profile"
+    perf = None
     if args.fetch:
-        paths = fetch(args.host, args.port, {int(word) for word in args.files}, prefix)
+        if args.target == "switch2":
+            perf = fetch_perf(args.host, args.port)
+            if perf is not None:
+                summarize_perf(perf)
+        paths = fetch(args.host, args.port, {int(word) for word in args.files}, prefix, remote, local)
     else:
-        paths = [Path(word) for word in args.files] or sorted(LOCAL.glob(f"{prefix}_*.txt"))
+        paths = [Path(word) for word in args.files] or sorted(local.glob(f"{prefix}_*.txt"))
     if args.spikes:
         status = 0
         for path in paths:
@@ -152,6 +213,8 @@ def main():
             print()
         return status
     if not paths:
+        if perf is not None:
+            return 0
         print("no profiles (set profiler = true under [debug] in config.toml, play, then --fetch)", file=sys.stderr)
         return 1
     return report(args, [parse(path) for path in paths])
@@ -159,10 +222,11 @@ def main():
 
 def report(args, profiles):
     image = args.images / profiles[0]["image"]
-    host_elf = args.images / "halo.elf"
+    native = getattr(args, "target", "switch") == "switch2"
+    host_elf = image if native else args.images / "halo.elf"
     guest_ranges = load_ranges(image)
     anchor_name, anchor_runtime = profiles[0]["anchor"]
-    anchor_link = symbol_address(host_elf, anchor_name) if host_elf.exists() else None
+    anchor_link = symbol_address(host_elf, anchor_name) if native or host_elf.exists() else None
     host_shift = anchor_runtime - anchor_link if anchor_link is not None else None
     if any(profile["anchor"] != profiles[0]["anchor"] or profile["image"] != profiles[0]["image"]
            for profile in profiles):
@@ -187,6 +251,11 @@ def report(args, profiles):
                 wanted.append((count, slot, [stack[0]] + [address - 4 for address in stack[1:]]))
 
     def where(address):
+        if native:
+            linked = address - host_shift if host_shift is not None else address
+            if any(start <= linked < end for start, end in guest_ranges):
+                return "guest", linked
+            return None, address
         if any(start <= address < end for start, end in guest_ranges):
             return "guest", address
         if host_shift is not None:
