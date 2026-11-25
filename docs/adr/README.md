@@ -14,11 +14,10 @@ history. `AGENTS.md` describes the process.
 These decisions are named by the spec and must be recorded before the code
 commits to an answer:
 
-- **Renderer** — Drako3D with Ampere DKSH compiled by UAM2, keeping OunceVK as
-  a documented contingency only.
 - **SDL split** — the existing SDL2 host with an SDL3 guest, or migration to
   native SDL3.
 
 ## Records
 
 - [0001. Use native LP64 for the game](0001-lp64-native-abi.md).
+- [0002. Use Drako3D and UAM2 for the renderer](0002-drako3d-uam2-renderer.md).
