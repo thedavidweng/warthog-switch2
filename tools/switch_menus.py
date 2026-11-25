@@ -69,6 +69,19 @@ SWITCH_VIDEO_ROWS = [
     ("CPU CLOCK:", "performance.cpu_clock", [("STOCK", "stock"), ("1 GHZ", "1020"), ("1.7 GHZ", "1785")],
      "1.7 GHz is the fastest Nintendo's games use.\n1 GHz and stock run cooler, and the battery lasts.", None),
 ]
+SWITCH2_VIDEO_ROWS = [
+    ("INTERNAL RESOLUTION:", "display.resolution_limit",
+     [("480P", "480"), ("720P", "720"), ("900P", "900"), ("1080P", "1080"),
+      ("1440P", "1440"), ("2160P", "2160")],
+     "The resolution the game draws at. Switch 2 handheld defaults to 1080p;\n"
+     "docked output supports 1080p, 1440p and 2160p.", None),
+    ("OUTPUT REFRESH:", "display.refresh_rate",
+     [("60 HZ", "60"), ("120 HZ", "120")],
+     "The display chooses the granted rate. 120 Hz is available up to 1440p;\n"
+     "2160p is limited to 60 Hz.", None),
+    ("SMOOTH MOTION:", "display.interpolation", port_settings.ON_OFF,
+     "Blend frames between the authoritative 30 Hz simulation ticks.", None),
+]
 # the controller's gyro page: its rows (the reference's Gyro Aim screen)
 GYRO_SENSITIVITIES = [(f"{value:g}", f"{value:g}") for value in
                       (0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10)]
@@ -99,7 +112,7 @@ QUIT_HANDLERS = {'<on event="back" open="chupathingy/quit_screen"/>': '<on event
                  '<on event="b" open="chupathingy/quit_screen"/>': '<on event="b" run="NULL"/>'}
 
 
-def switch_rows(rows: list) -> list:
+def switch_rows(rows: list, target="switch") -> list:
     """the rows the Switch shows, with no platform: a row's platform names
     the platforms it is on, separated by spaces (port_settings.py). The
     Switch keeps the rows for every platform and those naming "switch";
@@ -109,6 +122,8 @@ def switch_rows(rows: list) -> list:
     for row in rows:
         label, setting, choices, help_text, platform, *named = row
         if setting in ROWS_LEFT_OUT:
+            continue
+        if target == "switch2" and setting == "performance.cpu_clock":
             continue
         names = platform.split() if platform else None
         if names is not None and "switch" not in names:
@@ -121,16 +136,16 @@ def switch_rows(rows: list) -> list:
     return kept
 
 
-def switch_spec(spec: dict, extra_rows: list) -> dict:
+def switch_spec(spec: dict, extra_rows: list, target="switch") -> dict:
     """a screen's spec with the Switch's rows: the others' pared down and
     its own added, with no row taking another's place, and no nested list
     left with no rows. (A shallow copy: the rows are tuples, replaced, and
     an Action, a tuple of its own kind, does not deep-copy.)"""
     spec = dict(spec)
-    spec["rows"] = switch_rows(spec["rows"]) + extra_rows
+    spec["rows"] = switch_rows(spec["rows"], target) + extra_rows
     # (rows that take the place of a desktop row, which is not here)
     spec["same_place"] = []
-    views = [(name, label, help_text, switch_rows(rows))
+    views = [(name, label, help_text, switch_rows(rows, target))
              for name, label, help_text, rows in spec.get("views", [])]
     spec["views"] = [view for view in views if view[3]]
     return spec
@@ -186,12 +201,13 @@ def controls_rows_with_gyro(original):
     return rows_and_extra
 
 
-def files() -> dict:
+def files(target="switch") -> dict:
     """the files, by their paths below the menus folder"""
     port_settings.CONTROLLER_PAGES = [*port_settings.CONTROLLER_PAGES, "GYRO"]
     port_settings._controls_rows = controls_rows_with_gyro(port_settings._controls_rows)
     for folder, spec in port_settings.SCREENS.items():
-        port_settings.SCREENS[folder] = switch_spec(spec, SWITCH_VIDEO_ROWS if folder == "video_settings" else [])
+        rows = SWITCH2_VIDEO_ROWS if target == "switch2" else SWITCH_VIDEO_ROWS
+        port_settings.SCREENS[folder] = switch_spec(spec, rows if folder == "video_settings" else [], target)
     return {
         SETTINGS_PAGES: port_settings.chupathingy_settings_pages(),
         MAIN_MENU: main_menu_lines(),
@@ -204,9 +220,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=ROOT / "build" / "switch" / "menus",
                         help="the menus folder to write (default: build/switch/menus)")
+    parser.add_argument("--target", choices=("switch", "switch2"), default="switch")
     parser.add_argument("--stamp", type=Path, help="a file touched when done (the build's)")
     args = parser.parse_args()
-    written = files()
+    written = files(args.target)
     for name, lines in written.items():
         if not (MENUS / name).is_file():
             print(f"{name}: not a file the game embeds, so it would replace nothing", file=sys.stderr)

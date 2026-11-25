@@ -81,7 +81,7 @@ in memory nothing else writes. */
 #define IMAGE_BLOCK_SIZE (32 * 1024 * 1024)
 #define IMAGE_BLOCK_LIMIT 16
 #define TARGET_LIMIT 256
-/* the output: 1280x720 in handheld, 1920x1080 docked (host_dk_output_height) */
+/* Switch 1 keeps its 720p handheld output; Switch 2 supplies the VI2 output dimensions. */
 #define SCREEN_WIDTH 1280
 #define SCREEN_HEIGHT 720
 #define SCREEN_FULL_WIDTH 1920
@@ -1635,6 +1635,9 @@ static void swapchain_remake(void)
 	dkSwapchainDestroy(dk.swapchain);
 	dkMemBlockDestroy(dk.screen_memory);
 	swapchain_make();
+	#ifdef __SWITCH2__
+	(void)nx2DisplayReapply();
+	#endif
 	host_logf(HOST_LOG_INFO, "deko3d: presenting at %ux%u", (unsigned)dk.screen_width, (unsigned)dk.screen_height);
 }
 

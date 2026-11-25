@@ -5,6 +5,7 @@
 #pragma once
 #include <switch.h>
 #include <stdbool.h>
+#include "switch2_display.h"
 
 u64 nx2CoreMask(void);
 int nx2CoreCount(void);
@@ -12,6 +13,7 @@ int nx2CoreAt(unsigned n);
 Result nx2SetCpuBoost(bool on);
 void nx2DisplayInit(void);
 bool nx2DisplaySetFrameGeneration(bool enabled);
+void nx2DisplaySetInternalResolution(u32 height);
 int nx2DisplayRefreshRate(void);
 Result nx2DisplayApply(int swap_interval);
 Result nx2DisplayReapply(void);

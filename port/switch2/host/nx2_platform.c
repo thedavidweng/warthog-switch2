@@ -87,7 +87,11 @@ Result nx2SetCpuBoost(bool on)
 // ------------------------------------------------------------------------------------------------ display
 static Mutex s_displayMutex;
 static bool s_frameGeneration = false;
-static int s_refreshHz = 120;
+static struct switch2_display_state s_display = {
+	.internal_width = 1920, .internal_height = 1080,
+	.output_width = 1920, .output_height = 1080,
+	.requested_refresh = 60, .granted_refresh = 60, .interpolation = true
+};
 static bool s_tvEventOpen = false, s_tvRead = false;
 static Event s_tvEvent;
 static s32 s_tvWidth = 3840, s_tvHeight = 2160;
@@ -127,15 +131,12 @@ static void nx2ReadTvResolution(void)
 static void nx2ApplyMode(void)
 {
 	const bool docked = nx2Docked();
-	s_refreshHz = !docked || s_frameGeneration ? 120 : 60;
 	nx2ReadTvResolution();
 	u32 width = (u32)s_tvWidth, height = (u32)s_tvHeight;
-	const u32 maxHeight = s_frameGeneration ? 1440 : 2160;
-	if (height > maxHeight)
-	{
-		width = (width * maxHeight / height + 1) & ~1u;
-		height = maxHeight;
-	}
+	switch2_display_set_output(&s_display, width, height, docked);
+	s_display.requested_refresh = switch2_display_clamp_refresh(s_display.output_width, s_display.output_height, 120);
+	width = s_display.output_width;
+	height = s_display.output_height;
 	if (width == s_dockedWidth && height == s_dockedHeight)
 		return;
 	if (R_SUCCEEDED(nwindowSetModeDimensions(nwindowGetDefault(), 1920, 1080, width, height)))
@@ -152,17 +153,17 @@ static Result nx2ApplyPacing(int swap_interval)
 		swap_interval = 0;
 	Result rc = 0;
 	NWindow* window = nwindowGetDefault();
-	if (s_refreshHz > 60)
+	if (s_display.requested_refresh > 60)
 	{
 		// (every call: a swap interval set elsewhere, by EGL or drako3d, withdraws the 120 Hz request)
 		rc = nwindowSetFrameRates(window, 0, 0, true);
 	}
-	else if (!s_presentApplied || s_presentHz != s_refreshHz || s_presentInterval != swap_interval)
+	else if (!s_presentApplied || s_presentHz != 60 || s_presentInterval != swap_interval)
 	{
 		rc = nwindowSetSwapInterval(window, (u32)swap_interval);
 	}
 	s_presentApplied = R_SUCCEEDED(rc);
-	s_presentHz = s_refreshHz;
+	s_presentHz = s_display.requested_refresh;
 	s_presentInterval = swap_interval;
 	return rc;
 }
@@ -180,10 +181,10 @@ bool nx2DisplaySetFrameGeneration(bool enabled)
 	if (enabled == s_frameGeneration)
 		return false;
 	mutexLock(&s_displayMutex);
-	const int previousHz = s_refreshHz;
 	s_frameGeneration = enabled;
+	s_display.interpolation = enabled;
 	nx2ApplyMode();
-	const bool changed = s_refreshHz != previousHz;
+	const bool changed = s_display.requested_refresh != s_presentHz;
 	if (changed)
 		s_presentApplied = false;
 	mutexUnlock(&s_displayMutex);
@@ -197,12 +198,18 @@ int nx2DisplayRefreshRate(void)
 	// 120 Hz is a request, which VI2 grants only where the display has a 120 Hz mode. While nx2's frame rates pace the
 	// window, its present interval is 1 / the rate VI2 runs it at.
 	u16 numerator = 0, denominator = 0;
-	if (s_presentApplied &&
-		R_SUCCEEDED(nwindowGetPresentInterval(nwindowGetDefault(), &numerator, &denominator)) && numerator == 1 &&
-		denominator >= 30)
-		hz = denominator;
+	if (s_presentApplied && R_SUCCEEDED(nwindowGetPresentInterval(nwindowGetDefault(), &numerator, &denominator)))
+		hz = (int)switch2_display_interval_hz(numerator, denominator);
+	s_display.granted_refresh = (uint32_t)hz;
 	mutexUnlock(&s_displayMutex);
 	return hz;
+}
+
+void nx2DisplaySetInternalResolution(u32 height)
+{
+	mutexLock(&s_displayMutex);
+	switch2_display_set_internal(&s_display, height);
+	mutexUnlock(&s_displayMutex);
 }
 
 Result nx2DisplayApply(int swap_interval)
@@ -225,13 +232,13 @@ Result nx2DisplayReapply(void)
 bool nx2DisplayUpdate(void)
 {
 	mutexLock(&s_displayMutex);
-	const int previousHz = s_refreshHz;
+	const uint32_t previousRefresh = s_display.requested_refresh;
 	nx2ApplyMode();
 	// Docked at 120 Hz, every update: a renderer that sets a swap interval withdraws the 120 Hz request, and libounce
 	// caches the request, so asking again is cheap.
-	if (s_refreshHz != previousHz || (s_refreshHz > 60 && nx2Docked()))
+	if (s_display.requested_refresh != (uint32_t)s_presentHz || (s_display.requested_refresh > 60 && nx2Docked()))
 	{
-		if (s_refreshHz != previousHz)
+		if (s_display.requested_refresh != previousRefresh)
 			s_presentApplied = false;
 		nx2ApplyPacing(s_presentInterval < 0 ? 1 : s_presentInterval);
 	}
