@@ -319,7 +319,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
 
     # Ampere binaries must never share Maxwell's shader-cache namespace.
     uam_commit = record["dependencies"]["uam2"]["commit"][:12]
-    renderer_flags = f"{code_flags} {includes} -DHOST_DK_UAM_COMMIT='\"ampere-{uam_commit}\"'"
+    renderer_flags = (f"{code_flags} {includes} -DHOST_DK_UAM_COMMIT='\"ampere-{uam_commit}\"' "
+                      "-DHOST_DK_SHADER_COMPILE_FLAGS=0x200")
     for name in ("host_dk.c", "host_dk_shaders.c", "host_dk_hud.c"):
         source = PORT_DIR.parent / "switch/host" / name
         obj = BUILD / "host" / (name + ".o")

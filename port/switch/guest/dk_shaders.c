@@ -1007,18 +1007,21 @@ static void status_frame(void)
 {
 	static unsigned long frames;
 	static BOOL shown;
+	static uint32_t total;
 	uint32_t pending;
 
 	if (++frames < DK_STATUS_EVERY_FRAMES)
 		return;
 	frames = 0;
 	pending = host_dk_shader_pending();
+	if (pending > total)
+		total = pending;
 	if (pending >= DK_STATUS_MINIMUM || (shown && pending))
 	{
 		shown = TRUE;
 		terminal_status_printf(global_real_argb_yellow,
-			"Compiling shaders after an update: %u left. The game may be slow to respond until it is done.",
-			(unsigned)pending);
+			"Compiling shaders: %u / %u. The game may be slow to respond until it is done.",
+			(unsigned)(total > pending ? total - pending : 0), (unsigned)total);
 		return;
 	}
 	if (shown)
@@ -1340,7 +1343,8 @@ int dk_shader_map_waiting(void)
 	if (now_ms() - said >= 1000)
 	{
 		said = now_ms();
-		terminal_status_printf(global_real_argb_yellow, "Compiling this map's shaders: %u left.", (unsigned)pending);
+		terminal_status_printf(global_real_argb_yellow, "Compiling shaders: %u / %u",
+			(unsigned)(wait_most > pending ? wait_most - pending : 0), (unsigned)wait_most);
 	}
 	return 1;
 }
