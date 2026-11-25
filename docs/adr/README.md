@@ -16,9 +16,8 @@ commits to an answer:
 
 - **Renderer** — Drako3D with Ampere DKSH compiled by UAM2, keeping OunceVK as
   a documented contingency only.
-- **SDL split** — the existing SDL2 host with an SDL3 guest, or migration to
-  native SDL3.
 
 ## Records
 
 - [0001. Use native LP64 for the game](0001-lp64-native-abi.md).
+- [0003. SDL2 host and SDL3 seam](0003-sdl2-host-sdl3-seam.md).
