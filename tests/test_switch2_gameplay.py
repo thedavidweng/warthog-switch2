@@ -1,6 +1,7 @@
 import pathlib
 import contextlib
 import io
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -14,6 +15,40 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class DescriptorOrderingTest(unittest.TestCase):
+    def test_uam2_ampere_macro_and_binary(self):
+        if not shutil.which("docker"):
+            self.skipTest("Docker unavailable")
+        image = subprocess.run(
+            ["docker", "image", "inspect", "warthog-switch2-toolchain:local"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if image.returncode:
+            self.skipTest("Switch 2 toolchain image unavailable")
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = pathlib.Path(directory)
+            relative = root.relative_to(ROOT)
+            (root / "probe.vert").write_text(
+                "#version 460\n"
+                "#if !defined(DEKO3D) || DEKO3D != 200\n"
+                "#error not Ampere\n#endif\n"
+                "void main() { gl_Position = vec4(0.0); }\n")
+            subprocess.run(
+                [str(ROOT / "scripts/switch2/build.sh"), "uam2", "-s", "vert",
+                 "-o", str(relative / "probe.dksh"),
+                 "--asm=" + str(relative / "probe.asm"), str(relative / "probe.vert")],
+                cwd=ROOT, check=True, capture_output=True, text=True)
+            magic, header_size, control_size, code_size, _, count = struct.unpack_from(
+                "<6I", (root / "probe.dksh").read_bytes())
+            self.assertEqual(magic, 0x48534B44)
+            self.assertGreater(header_size, 0)
+            self.assertGreater(control_size, 0)
+            self.assertGreater(code_size, 0)
+            self.assertEqual(count, 1)
+            self.assertTrue((root / "probe.asm").read_text().strip())
+
+    def test_engine_asserts_actual_tick_rate(self):
+        source = (ROOT / "port/switch2/host/headless_engine.c").read_text()
+        self.assertIn('_Static_assert(TICKS_PER_SECOND == 30,', source)
+
     def test_tick_check_on_host(self):
         program = r"""
 #include <stdint.h>
