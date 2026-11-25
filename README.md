@@ -43,7 +43,7 @@ evidence behind it.
 | Area | Status |
 |---|---|
 | Upstream Switch port (`ninja switch`) | Implemented — upstream's code, untouched by this repository |
-| Switch 2 toolchain, `ninja switch2`, packaging | Not yet supported — in progress |
+| Switch 2 toolchain, `ninja switch2`, packaging | Compiled — the program builds, links and passes the artifact audit; not yet run on a console |
 | Drako3D renderer and Ampere shader compilation | Not yet supported — in progress |
 | Gameplay, campaign, multiplayer on Switch 2 | Not yet supported |
 | Switch 2 display modes (1080p120 handheld, 4K60 / 1440p120 docked, VRR) | Not yet supported |
@@ -126,7 +126,7 @@ ninja switch
 python3 -m unittest discover -s tests
 python3 tools/switch_overrides.py
 
-# The Switch 2 build, once port/switch2/build.py and `ninja switch2` exist
+# The Switch 2 build, in its pinned toolchain (scripts/switch2/build.sh)
 python3 chupathingyce/configure.py --console-port port/switch2
 ninja switch2
 ```
@@ -135,7 +135,9 @@ Dependency versions are pinned in [UPSTREAM.json](UPSTREAM.json) and nowhere
 else. [AGENTS.md](AGENTS.md) has the full development guide:
 [GLOSSARY.md](GLOSSARY.md) for the vocabulary, `docs/adr/` for the decision
 records, and `port/switch/README.md` and `port/switch/DEKO3D.md` for the
-existing renderer and the host/guest split.
+existing renderer and the host/guest split, and
+[`port/switch2/README.md`](port/switch2/README.md) for the Switch 2 build, its
+pinned toolchain and the artifact audit.
 
 ### Deploying to a development console
 

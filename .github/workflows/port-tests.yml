@@ -33,7 +33,7 @@ jobs:
           test -f build.ninja
           grep -q '^# Switch build: no devkitPro found' build.ninja
       - name: The port's Python compiles
-        run: python3 -m py_compile port/switch/build.py tools/*.py
+        run: python3 -m py_compile port/switch/build.py port/switch2/build.py tools/*.py
       # (tests/test_repo_docs.py: UPSTREAM.json's pins, AGENTS.md's sections,
       # GLOSSARY.md's terms and README.md's claims, with no toolchain and no
       # console. Runs before the submodule is needed.)

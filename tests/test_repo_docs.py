@@ -30,7 +30,7 @@ UPSTREAM_COMMIT = "366f43cbe060fcc554c00d834075d5d8f7f8e534"
 ENGINE_COMMIT = "2e5eac00e3d6655e094fbbcd13253ac2b10ee773"
 OUNCEBREW_COMMITS = {
     "ounce-devkit": "5e957599bd498643d82e5470aec80da67a12685d",
-    "libounce": "75e79e28a9d103c9c65e74d1bb1653a37b67b9cd",
+    "libounce": "03af07a739a9a3b48704500cffcd6155692cc194",
     "kaihen": "3b23b5dc6e75539855eca69ffdda371ce69631bb",
     "drako3d": "93ba2e7fbf2d3dc648f9f9f08e8b3aef4a70945d",
     "uam2": "11f145faa1c13bc78da3c8bea55160b4cd672e40",
