@@ -15,9 +15,12 @@ void switch2_slots_init(struct switch2_controller_slots *slots)
 void switch2_slots_update(struct switch2_controller_slots *slots,
 	int handheld_connected, const int wireless_connected[SWITCH2_NPAD_COUNT])
 {
-	unsigned player;
+	unsigned player, wireless;
+	uint32_t previous[SWITCH2_LOCAL_PLAYER_COUNT];
 	int available;
 
+	for (player = 0; player < SWITCH2_LOCAL_PLAYER_COUNT; player++)
+		previous[player] = slots->active[player];
 	available = handheld_connected;
 	for (player = 0; player < SWITCH2_NPAD_COUNT; player++)
 		available |= wireless_connected[player] != 0;
@@ -25,36 +28,77 @@ void switch2_slots_update(struct switch2_controller_slots *slots,
 	if (slots->active[0] == SWITCH2_NPAD_INVALID ||
 		(slots->active[0] == SWITCH2_NPAD_HANDHELD && !handheld_connected) ||
 		(slots->active[0] < SWITCH2_NPAD_COUNT && !wireless_connected[slots->active[0]])) {
+		slots->active[0] = SWITCH2_NPAD_INVALID;
 		if (slots->preferred[0] == SWITCH2_NPAD_HANDHELD && handheld_connected)
 			slots->active[0] = SWITCH2_NPAD_HANDHELD;
 		else if (slots->preferred[0] < SWITCH2_NPAD_COUNT &&
-			wireless_connected[slots->preferred[0]])
-			slots->active[0] = slots->preferred[0];
-		else if (handheld_connected)
+			wireless_connected[slots->preferred[0]]) {
+			int reserved = 0;
+			for (player = 1; player < SWITCH2_LOCAL_PLAYER_COUNT; player++)
+				reserved |= previous[player] == slots->preferred[0];
+			if (!reserved)
+				slots->active[0] = slots->preferred[0];
+		}
+		if (slots->active[0] == SWITCH2_NPAD_INVALID && handheld_connected)
 			slots->active[0] = SWITCH2_NPAD_HANDHELD;
-		else
-			for (player = 0; player < SWITCH2_NPAD_COUNT; player++)
-				if (wireless_connected[player]) {
+		if (slots->active[0] == SWITCH2_NPAD_INVALID)
+			for (player = 0; player < SWITCH2_NPAD_COUNT; player++) {
+				unsigned other;
+				int reserved = 0;
+				for (other = 1; other < SWITCH2_LOCAL_PLAYER_COUNT; other++)
+					reserved |= previous[other] == player;
+				if (wireless_connected[player] && !reserved) {
 					slots->active[0] = player;
 					break;
 				}
+			}
 		if (!available)
 			slots->active[0] = SWITCH2_NPAD_INVALID;
 	}
 	if (slots->active[0] != SWITCH2_NPAD_INVALID)
 		slots->preferred[0] = slots->active[0];
 
-	for (player = 1; player <= SWITCH2_NPAD_COUNT; player++) {
-		unsigned wireless = player - 1;
-		slots->active[player] = wireless_connected[wireless] ?
-			wireless : SWITCH2_NPAD_INVALID;
-		slots->preferred[player] = wireless;
+	/* Fill the remaining local-player slots with each connected wireless
+	controller exactly once.  A wireless controller currently driving player
+	zero is reserved, so player zero and player one cannot cross-talk. */
+	for (player = 1; player < SWITCH2_LOCAL_PLAYER_COUNT; player++)
+		if (previous[player] < SWITCH2_NPAD_COUNT &&
+			wireless_connected[previous[player]])
+			slots->active[player] = previous[player];
+		else
+			slots->active[player] = SWITCH2_NPAD_INVALID;
+	for (player = SWITCH2_LOCAL_PLAYER_COUNT; player <= SWITCH2_NPAD_COUNT; player++)
+		slots->active[player] = SWITCH2_NPAD_INVALID;
+	for (player = 1; player < SWITCH2_LOCAL_PLAYER_COUNT; player++)
+		if (slots->active[player] == slots->active[0])
+			slots->active[player] = SWITCH2_NPAD_INVALID;
+	for (wireless = 0; wireless < SWITCH2_NPAD_COUNT; wireless++) {
+		int assigned = 0;
+		unsigned existing, empty = SWITCH2_LOCAL_PLAYER_COUNT;
+		for (existing = 0; existing < SWITCH2_LOCAL_PLAYER_COUNT; existing++)
+			if (slots->active[existing] == wireless)
+				assigned = 1;
+		for (existing = 1; existing < SWITCH2_LOCAL_PLAYER_COUNT; existing++)
+			if (slots->active[existing] == SWITCH2_NPAD_INVALID) {
+				empty = existing;
+				break;
+			}
+		if (wireless_connected[wireless] && !assigned &&
+			empty < SWITCH2_LOCAL_PLAYER_COUNT)
+			slots->active[empty] = wireless;
 	}
+	for (player = SWITCH2_LOCAL_PLAYER_COUNT; player <= SWITCH2_NPAD_COUNT; player++)
+		slots->preferred[player] = SWITCH2_NPAD_INVALID;
+	for (player = 1; player < SWITCH2_LOCAL_PLAYER_COUNT; player++)
+		if (slots->active[player] != SWITCH2_NPAD_INVALID)
+			slots->preferred[player] = slots->active[player];
+	for (; player <= SWITCH2_NPAD_COUNT; player++)
+		slots->preferred[player] = SWITCH2_NPAD_INVALID;
 }
 
 uint32_t switch2_slot_npad(const struct switch2_controller_slots *slots, unsigned player)
 {
-	return player <= SWITCH2_NPAD_COUNT ? slots->active[player] : SWITCH2_NPAD_INVALID;
+	return player < SWITCH2_LOCAL_PLAYER_COUNT ? slots->active[player] : SWITCH2_NPAD_INVALID;
 }
 
 int switch2_slot_connected(const struct switch2_controller_slots *slots, unsigned player)

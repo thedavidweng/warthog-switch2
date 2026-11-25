@@ -14,6 +14,7 @@ the values here makes slot selection testable without including libnx. */
 #define SWITCH2_NPAD_COUNT 4u
 #define SWITCH2_NPAD_HANDHELD 32u
 #define SWITCH2_NPAD_INVALID UINT32_MAX
+#define SWITCH2_LOCAL_PLAYER_COUNT 4u
 
 struct switch2_controller_slots {
 	uint32_t preferred[SWITCH2_NPAD_COUNT + 1];
