@@ -23,6 +23,7 @@ offer. UPnP is posix_upnp.c's, compiled here with the port's miniupnpc.
 #include "warthog_log.h"
 
 #include "posix.h"
+#include "switch2_net.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -40,10 +41,7 @@ offer. UPnP is posix_upnp.c's, compiled here with the port's miniupnpc.
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <switch.h>
-
-/* ---------- sockets */
 
 /* Winsock error codes (winsockx.h) */
 #define WSAEINTR 10004
@@ -105,6 +103,23 @@ costs nothing in an ordinary run. */
 default tcp_tx_buf_max_size and tcp_rx_buf_max_size (host_main.c's are
 larger only to make the budget larger) */
 #define SOCKET_BUFFER_LIMIT (256 * 1024)
+
+static __thread int last_error;
+
+/* Socket buffers on the console come out of one budget per process, which
+the bsd service is given when sockets are initialised (libnx's default: four
+times the largest TCP and UDP buffers, about 2.2 MB; host_main.c's is four
+times that). Running out of it is
+WSAENOBUFS to the game, which gives up whatever it was making - the first
+internet join failed that way, on creating its client - so it is always
+said. It is rare by nature, unlike the per-datagram failures, so saying it
+costs nothing in an ordinary run. */
+#define BUFFER_FAILURES_LOGGED 20
+/* the most a socket's buffer is set to (posix_socket_setsockopt): libnx's
+default tcp_tx_buf_max_size and tcp_rx_buf_max_size (host_main.c's are
+larger only to make the budget larger) */
+#define SOCKET_BUFFER_LIMIT (256 * 1024)
+
 
 static int fail(void)
 {
