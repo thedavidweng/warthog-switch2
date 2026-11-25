@@ -57,6 +57,7 @@ run() {
 			-w /src \
 			--user "$(id -u):$(id -g)" \
 			-e HOME=/tmp \
+			-e HALO_BUILD_NUMBER="${HALO_BUILD_NUMBER:-0}" \
 			"$image" "$@"
 	fi
 }

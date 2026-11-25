@@ -19,6 +19,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 */
 
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "switch2_gamedata.h"
 #include "switch2_mman.h"
 #include "nx2_platform.h"
+#include "switch2_update.h"
 
 extern int halo_main(void);
 void host_dk_idle(void);
@@ -46,6 +48,39 @@ void xbox_heap_reset_for_shutdown(void);
 flavor and version and the pins it was made from, so a log from a console
 says exactly which build wrote it */
 #include "warthog_build.h"
+
+typedef int (*https_body_fn)(void *, const void *, size_t, long long);
+int host_https_get(const char *, int, https_body_fn, void *, char *, size_t, char *, size_t);
+
+struct update_download { uint8_t *data; size_t size; };
+
+static int update_body(void *ctx, const void *data, size_t size, long long total)
+{
+	(void)total;
+	struct update_download *download = ctx;
+	if (size > 128 * 1024 * 1024 - download->size) return 0;
+	uint8_t *next = realloc(download->data, download->size + size);
+	if (!next) return 0;
+	download->data = next;
+	memcpy(next + download->size, data, size);
+	download->size += size;
+	return 1;
+}
+
+static int update_http(void *ctx, const char *url, int follow, uint8_t **body,
+                       size_t *size, char *location, size_t location_size)
+{
+	(void)ctx;
+	char error[256];
+	struct update_download download = {0};
+	if (R_FAILED(socketInitializeDefault())) return -1;
+	int status = host_https_get(url, follow, update_body, &download, location,
+	                            location_size, error, sizeof(error));
+	socketExit();
+	*body = download.data;
+	*size = download.size;
+	return status;
+}
 
 extern const u8 __start__[];
 
@@ -217,6 +252,8 @@ static void extraction_progress(void *ctx, int index, int count, const char *pat
 
 int main(int argc, char **argv)
 {
+	if (!switch2_update_finish_pending(WARTHOG_SWITCH2_CARD_DIR))
+		return 1;
 	consoleInit(NULL);
 	if (!warthog_log_open())
 	{
@@ -226,6 +263,14 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	warthog_log("INFO", "--- launch ---");
+	if (HALO_BUILD_NUMBER > 0) {
+		char update_error[256];
+		int result = switch2_update_check(WARTHOG_SWITCH2_CARD_DIR, WARTHOG_SWITCH2_FLAVOR,
+		                                  HALO_BUILD_NUMBER, update_http, NULL,
+		                                  update_error, sizeof(update_error));
+		if (result < 0) warthog_log("WARN", "update: %s", update_error);
+		else if (result > 0) warthog_log("INFO", "update installed; restart to use it");
+	}
 	warthog_log("INFO", "engine symbol anchor: %zx", (size_t)warthog_engine_symbol_anchor());
 	log_build();
 	log_launch_context();

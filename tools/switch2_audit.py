@@ -21,9 +21,11 @@ log says what to fix. `audit()` returns them; the command line prints one per
 line and exits non-zero when there is any.
 """
 
+import argparse
 import json
 import struct
 import sys
+import zipfile
 from pathlib import Path
 from typing import List
 
@@ -165,12 +167,22 @@ def elf_problems(elf: bytes) -> List[str]:
     return problems
 
 
-def map_problems(text: str) -> List[str]:
+def map_problems(text: str, flavor: str = None) -> List[str]:
     """what the link pulled in: Switch 2's libraries, and nothing of Switch 1's"""
     problems = []
-    for library in REQUIRED_LIBRARIES:
+    for library in ("libounce.a", "libuam2rt.a"):
         if library not in text:
             problems.append(f"warthog.elf.map: {library} is not linked")
+    renderer = "libdrako3dd.a" if flavor == "debug" else "libdrako3d.a"
+    if flavor is None:
+        if not any(name in text for name in ("libdrako3d.a", "libdrako3dd.a")):
+            problems.append("warthog.elf.map: Drako3D is not linked")
+    else:
+        if renderer not in text:
+            problems.append(f"warthog.elf.map: {renderer} is not linked")
+        other = "libdrako3d.a" if flavor == "debug" else "libdrako3dd.a"
+        if other in text:
+            problems.append(f"warthog.elf.map: {other} is linked for {flavor}")
     for path in FORBIDDEN_PATHS:
         if path in text:
             problems.append(f"warthog.elf.map: {path} is linked: this is the original Switch's platform")
@@ -182,7 +194,7 @@ def map_problems(text: str) -> List[str]:
     return problems
 
 
-def audit(directory: Path) -> List[str]:
+def audit(directory: Path, flavor: str = None) -> List[str]:
     """every problem with the artifacts in `directory`; empty when it is sound"""
     directory = Path(directory)
     problems = problems_for_missing(directory)
@@ -191,19 +203,79 @@ def audit(directory: Path) -> List[str]:
     problems.extend(nro_problems((directory / "warthog.nro").read_bytes()))
     problems.extend(nacp_problems((directory / "warthog.nacp").read_bytes()))
     problems.extend(elf_problems((directory / "warthog.elf").read_bytes()))
-    problems.extend(map_problems((directory / "warthog.elf.map").read_text(encoding="utf-8", errors="replace")))
+    problems.extend(map_problems((directory / "warthog.elf.map").read_text(encoding="utf-8", errors="replace"), flavor))
+    return problems
+
+
+def audit_package(path: Path, flavor: str = None, symbols: Path = None) -> List[str]:
+    path = Path(path)
+    problems = []
+    if path.is_dir():
+        files = {p.relative_to(path).as_posix(): p.read_bytes()
+                 for p in path.rglob("*") if p.is_file()}
+    elif path.is_file() and zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            problems.extend(f"{entry.filename}: compressed ZIP entry" for entry in archive.infolist()
+                            if entry.compress_type != zipfile.ZIP_STORED)
+            files = {entry.filename: archive.read(entry) for entry in archive.infolist() if not entry.is_dir()}
+    else:
+        return [f"{path}: not a package directory or zip"]
+    for name in files:
+        lower = name.lower()
+        if lower.endswith((".map", ".iso", ".xiso", ".7z", ".bik", ".sav", ".dksh")) or lower.rsplit("/", 1)[-1] == "loading.tga":
+            problems.append(f"{name}: forbidden package file")
+    root = "switch/warthog/"
+    for name in ("warthog.nro", "LICENSE", "THIRD-PARTY-NOTICES.txt"):
+        if root + name not in files:
+            problems.append(f"{root + name}: missing")
+    if root + "warthog.nro" in files:
+        problems.extend(nro_problems(files[root + "warthog.nro"]))
+    if root + "THIRD-PARTY-NOTICES.txt" in files:
+        notice = files[root + "THIRD-PARTY-NOTICES.txt"].decode("utf-8", "replace").lower()
+        for required in ("gpl-3.0-or-later", "zlib", "drako3d", "uam2", "isc", "libounce",
+                         "libkaihen", "mit", "nagaa95/dolphin-nx",
+                         "7fb685b353e19a9a5848e9bd658945d1f9cd382a", "not affiliated"):
+            if required not in notice:
+                problems.append(f"THIRD-PARTY-NOTICES.txt: missing {required}")
+    if flavor and not symbols:
+        problems.append("symbols archive required to verify flavor")
+    if symbols:
+        if not zipfile.is_zipfile(symbols):
+            problems.append(f"{symbols}: not a symbols ZIP")
+            return problems
+        with zipfile.ZipFile(symbols) as archive:
+            names = set(archive.namelist())
+            for name in ("warthog.elf", "warthog.elf.map", "warthog.nacp"):
+                if name not in names:
+                    problems.append(f"symbols: missing {name}")
+            if "warthog.elf" in names:
+                problems.extend(elf_problems(archive.read("warthog.elf")))
+            if "warthog.elf.map" in names:
+                problems.extend(map_problems(archive.read("warthog.elf.map").decode("utf-8", "replace"), flavor))
+            nro = files.get(root + "warthog.nro")
+            if nro and not nro_problems(nro) and "warthog.nacp" in names:
+                size, = struct.unpack_from("<I", nro, NRO_SIZE_OFFSET)
+                offset, length = struct.unpack_from("<QQ", nro, size + 24)
+                if archive.read("warthog.nacp") != nro[size + offset:size + offset + length]:
+                    problems.append("symbols: NACP differs from NRO")
     return problems
 
 
 def main(argv: List[str]) -> int:
-    directory = Path(argv[1]) if len(argv) > 1 else Path("build") / "switch2"
-    problems = audit(directory)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", nargs="?", type=Path, default=Path("build") / "switch2")
+    parser.add_argument("--flavor", choices=("debug", "release"))
+    parser.add_argument("--package", type=Path)
+    parser.add_argument("--symbols", type=Path)
+    args = parser.parse_args(argv[1:])
+    directory = args.package or args.directory
+    problems = audit_package(args.package, args.flavor, args.symbols) if args.package else audit(directory, args.flavor)
     for problem in problems:
         print(problem)
     if problems:
         print(f"{len(problems)} problem(s) in {directory}")
         return 1
-    print(f"{directory}: Switch 2 NRO, NACP, ELF and linker map are sound")
+    print(f"{directory}: audit passed")
     return 0
 
 
