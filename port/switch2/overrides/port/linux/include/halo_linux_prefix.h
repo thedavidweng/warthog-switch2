@@ -131,6 +131,12 @@ say; the game has its own, of other types (cseries.h, real_math.h) */
 #include <setjmp.h>
 #include <signal.h>
 #include <time.h>
+#ifdef __SWITCH2__
+#include <sys/time.h>
+#ifdef HALO_LINUX_PLATFORM_LAYER
+int clock_nanosleep(clockid_t, int, const struct timespec *, struct timespec *);
+#endif
+#endif
 #include <math.h>
 #ifdef __SWITCH2__
 /* Newlib hides C99 declarations in the game's GNU89 mode. */
@@ -146,6 +152,9 @@ float fabsf(float);
 #if defined(__ANDROID__) || defined(__SWITCH2__)
 #undef strnlen
 #undef random
+#if defined(__SWITCH2__) && defined(HALO_LINUX_PLATFORM_LAYER)
+size_t strnlen(const char *, size_t);
+#endif
 #endif
 #endif
 

@@ -4,6 +4,16 @@ Whole-file fixes to the engine belong here until upstream takes them. Each
 override must be listed below with its purpose and upstream destination.
 `python3 tools/switch_overrides.py` checks both console override directories.
 
+## port/linux/src/msvc_crt.c
+
+Uses GCC AArch64 register instructions for the Switch 2 floating-point control
+word. This can be proposed upstream for GCC AArch64 builds.
+
+## port/linux/src/d3d8_resources.c
+
+Uses a 32-bit format argument after the LP64 source rewrite. This can be
+proposed upstream for the LP64 build.
+
 ## port/linux/src/xbox_heap.c
 
 Commits the LP64 Xbox heap in 1 MiB increments on Switch 2. This

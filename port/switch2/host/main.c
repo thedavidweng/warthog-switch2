@@ -182,6 +182,8 @@ static void log_shader_runtime(void)
 	}
 }
 
+extern uintptr_t warthog_engine_symbol_anchor(void);
+
 int main(int argc, char **argv)
 {
 	consoleInit(NULL);
@@ -193,6 +195,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	warthog_log("INFO", "--- launch ---");
+	warthog_log("INFO", "engine symbol anchor: %zx", (size_t)warthog_engine_symbol_anchor());
 	log_build();
 	log_launch_context();
 	log_firmware();

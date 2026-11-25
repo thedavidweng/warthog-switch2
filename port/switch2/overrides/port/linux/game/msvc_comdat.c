@@ -47,3 +47,13 @@ alone.
 #include "math/real_math.h"
 #include "bitmaps/bitmaps_inlines.h"
 #include "physics/collisions.h"
+
+__attribute__((weak)) boolean valid_real_normal2d(real_vector2d const *normal)
+{
+	return valid_realcmp(magnitude_squared2d(normal), 1.0f);
+}
+
+__attribute__((weak)) void _ReadWriteBarrier(void)
+{
+	__asm__ volatile("" ::: "memory");
+}
