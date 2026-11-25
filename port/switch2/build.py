@@ -120,7 +120,8 @@ def devkitpro_dir(sln: Any) -> Optional[Path]:
 
 def configure_inputs(port: ConsolePort) -> List[Path]:
     """Files whose change must re-run configure.py."""
-    return [port.path("host"), port.path("README.md"), REPO_ROOT / "UPSTREAM.json"]
+    return [port.path("host"), port.path("README.md"), REPO_ROOT / "UPSTREAM.json",
+            port.path("probe/warthog.vert"), port.path("probe/warthog.frag")]
 
 
 def build_header(sln: Any, record: dict) -> str:
@@ -223,6 +224,14 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     if not header.is_file() or header.read_text(encoding="utf-8") != text:
         header.write_text(text, encoding="utf-8")
 
+    shader_header = BUILD / "gfx_probe_shaders.h"
+    shader_text = "\n".join(
+        f"static const char {name}[] = {json.dumps((PORT_DIR / 'probe' / filename).read_text())};"
+        for name, filename in (("vertex_glsl", "warthog.vert"), ("fragment_glsl", "warthog.frag"))
+    ) + "\n"
+    if not shader_header.is_file() or shader_header.read_text(encoding="utf-8") != shader_text:
+        shader_header.write_text(shader_text, encoding="utf-8")
+
     # ---------- the program
 
     n.rule(
@@ -300,6 +309,20 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
            description="SWITCH2 PROBE NRO $out")
     n.build(outputs=probe_nro, rule="switch2_probe_nro", inputs=[probe_elf, nacp, ICON])
     n.build(outputs="switch2-probe-abi", rule="phony", inputs=[probe_nro, probe_elf])
+    gfx_obj = BUILD / "probe" / "gfx_probe.c.o"
+    n.build(outputs=gfx_obj, rule="switch2_cc", inputs=PORT_DIR / "probe" / "gfx_probe.c",
+            implicit=[header, shader_header],
+            variables={"cflags": f"{code_flags} {includes} -I{_quote(PORT_DIR / 'include')}"})
+    gfx_elf = BUILD / "gfx_probe.elf"
+    n.build(outputs=gfx_elf, rule="switch2_link", inputs=[gfx_obj])
+    gfx_nro = BUILD / "gfx_probe.nro"
+    n.rule(name="switch2_gfx_nro",
+           command=(f"{devkitpro / 'tools' / 'bin' / 'elf2nro'} "
+                    f"{(Path.cwd() / gfx_elf).resolve()} {(Path.cwd() / gfx_nro).resolve()}"
+                    f" --icon={ICON.resolve()} --nacp={(Path.cwd() / nacp).resolve()}"),
+           description="SWITCH2 GFX PROBE NRO $out")
+    n.build(outputs=gfx_nro, rule="switch2_gfx_nro", inputs=[gfx_elf, nacp, ICON])
+    n.build(outputs="switch2-probe-gfx", rule="phony", inputs=[gfx_nro, gfx_elf])
 
     sdl_objects = []
     for source in (PORT_DIR / "probe" / "sdl_probe.c", HOST_DIR / "nx2_platform.c"):

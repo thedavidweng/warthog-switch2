@@ -73,6 +73,13 @@ index df789c8..b310ac9 100644
  	nak_compiler_destroy(s_nak);
  	s_nak = NULL;
  	glsl_type_singleton_decref();
+@@ -142,2 +138 @@
+-#ifndef UAM2_RUNTIME
+ bool uam2_compile_glsl(const char* source, enum uam2_stage stage, bool dump_asm, struct uam2_program* out,
+@@ -154,3 +149 @@
+-#endif
+-
+ #ifdef UAM2_RUNTIME
 diff --git a/source/meson.build b/source/meson.build
 index 7ba5acd..49d03f1 100644
 --- a/source/meson.build
@@ -124,6 +131,17 @@ index ded60b2..dd78a29 100644
 +		free(log.buf);
 +	return dksh;
 +}
+diff --git a/source/horizon.c b/source/horizon.c
+--- a/source/horizon.c
++++ b/source/horizon.c
+@@ -27 +27,7 @@
+ }
++
++/* Horizon has no Unix user or group IDs. Mesa compares real and effective IDs. */
++uid_t getuid(void) { return 0; }
++uid_t geteuid(void) { return 0; }
++gid_t getgid(void) { return 0; }
++gid_t getegid(void) { return 0; }
 diff --git a/cross/rust/build-std-sysroot.sh b/cross/rust/build-std-sysroot.sh
 index 3e1099d..a562d91 100755
 --- a/cross/rust/build-std-sysroot.sh
