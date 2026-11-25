@@ -47,7 +47,8 @@ class GameDataTests(unittest.TestCase):
         library = Path(cls.build.name) / "gamedata.dylib"
         subprocess.run(
             ["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-shared", "-fPIC",
-             str(ROOT / "port/switch2/host/switch2_gamedata.c"), "-o", str(library)],
+             str(ROOT / "port/switch2/host/switch2_gamedata.c"),
+             str(ROOT / "port/switch2/host/switch2_custom_edition.c"), "-o", str(library)],
             check=True,
         )
         cls.lib = ctypes.CDLL(str(library))
@@ -98,7 +99,7 @@ class GameDataTests(unittest.TestCase):
             self.assertEqual((root / "save" / "old").read_bytes(), b"save")
             self.assertEqual((root / "config.toml").read_text(), "new")
             self.assertEqual((legacy / "config.toml").read_text(), "old")
-            self.assertFalse((root / "maps_ce").exists())
+            self.assertTrue((root / "maps_ce").is_dir())
             self.assertFalse((root / "bink").exists())
 
     def test_extract_disc_images(self):
@@ -178,4 +179,4 @@ class GameDataTests(unittest.TestCase):
             self.assertEqual((root / "maps/bloodgulch.map").read_bytes(), b"existing")
             self.assertEqual((root / "maps/ui.map").read_bytes(), b"ui")
             self.assertFalse((root / "save").exists())
-            self.assertFalse((root / "maps_ce").exists())
+            self.assertTrue((root / "maps_ce").is_dir())
