@@ -186,7 +186,7 @@ def platform_objects(n, port, build, code_flags, includes, release):
         if name in excluded or (name.startswith("posix_") and name not in posix):
             continue
         if name in posix:
-            extra = tls if name == "posix_browser.c" else upnp if name == "posix_upnp.c" else \
+            extra = tls + " -D__ANDROID__=1" if name == "posix_browser.c" else upnp if name == "posix_upnp.c" else \
                     f"-I{third / 'stb'}" if name == "posix_ui_font.c" else ""
             add(source, f"{extra} {native}", source.relative_to(game))
         else:
@@ -220,7 +220,7 @@ def platform_objects(n, port, build, code_flags, includes, release):
     runner_flags = platform.replace("-DHALO_LINUX_PLATFORM_LAYER", "")
     add(runner_rewritten, f"{runner_flags} -I{rewritten / 'source/math'}",
         Path("bridge/headless_engine.c"))
-    for name, extra in (("switch2_tls.c", tls), ("switch2_net.c", ""), ("switch2_sdl_headless.c", ""),
+    for name, extra in (("switch2_tls.c", tls), ("switch2_net.c", ""), ("switch2_net_map.c", ""), ("switch2_sdl_headless.c", ""),
                         ("switch2_posix_compat.c", "")):
         add(port.root / "host" / name, f"{extra} {native} -DHALO_SWITCH2_GRAPHICAL", Path("bridge") / name)
     for name in ("tomlc17/tomlc17.c", "kcp/ikcp.c"):

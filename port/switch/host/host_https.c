@@ -147,6 +147,13 @@ static const char roots[] =
 	"jjxDah2nGN59PRbxYvnKkKj9\n"
 	"-----END CERTIFICATE-----\n";
 
+#ifdef __SWITCH2__
+const char *host_https_roots(void)
+{
+	return roots;
+}
+#endif
+
 static int fail(char *error, size_t error_size, const char *format, ...) __attribute__((format(printf, 3, 4)));
 
 static int fail(char *error, size_t error_size, const char *format, ...)

@@ -33,6 +33,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "warthog_log.h"
 #include "headless_engine.h"
+#include "switch2_net.h"
 #include "switch2_gamedata.h"
 #include "switch2_mman.h"
 #include "nx2_platform.h"
@@ -43,6 +44,8 @@ void host_dk_shutdown(void);
 void host_sdl_quit(void);
 void platform_xbox_memory_reset_for_shutdown(void);
 void xbox_heap_reset_for_shutdown(void);
+const char *host_https_roots(void);
+int switch2_seed_certificates(const char *root, const char *bundle);
 
 /* What port/switch2/build.py generates from UPSTREAM.json: the build's
 flavor and version and the pins it was made from, so a log from a console
@@ -70,13 +73,11 @@ static int update_body(void *ctx, const void *data, size_t size, long long total
 static int update_http(void *ctx, const char *url, int follow, uint8_t **body,
                        size_t *size, char *location, size_t location_size)
 {
-	(void)ctx;
 	char error[256];
 	struct update_download download = {0};
-	if (R_FAILED(socketInitializeDefault())) return -1;
+	if (!*(const bool *)ctx) return -1;
 	int status = host_https_get(url, follow, update_body, &download, location,
 	                            location_size, error, sizeof(error));
-	socketExit();
 	*body = download.data;
 	*size = download.size;
 	return status;
@@ -263,10 +264,24 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	warthog_log("INFO", "--- launch ---");
+	const char *data_root = getenv("HALO_DATA_ROOT");
+	if (!data_root || !*data_root) data_root = "sdmc:/switch/warthog";
+	if (!switch2_net_cleanup_stale_map_parts(data_root))
+		warthog_log("WARN", "maps: cannot clean stale download parts");
+	if (!switch2_seed_certificates(data_root, host_https_roots()))
+		warthog_log("WARN", "game list: cannot prepare certificate bundle");
+	SocketInitConfig sockets = *socketGetDefaultInitConfig();
+	sockets.num_bsd_sessions = 8;
+	sockets.sb_efficiency = 8;
+	sockets.tcp_tx_buf_max_size = 0x80000;
+	sockets.tcp_rx_buf_max_size = 0x80000;
+	bool sockets_ready = R_SUCCEEDED(socketInitialize(&sockets));
+	if (!sockets_ready)
+		warthog_log("WARN", "sockets: initialization failed; networking is unavailable");
 	if (HALO_BUILD_NUMBER > 0) {
 		char update_error[256];
 		int result = switch2_update_check(WARTHOG_SWITCH2_CARD_DIR, WARTHOG_SWITCH2_FLAVOR,
-		                                  HALO_BUILD_NUMBER, update_http, NULL,
+		                                  HALO_BUILD_NUMBER, update_http, &sockets_ready,
 		                                  update_error, sizeof(update_error));
 		if (result < 0) warthog_log("WARN", "update: %s", update_error);
 		else if (result > 0) warthog_log("INFO", "update installed; restart to use it");
@@ -326,6 +341,7 @@ int main(int argc, char **argv)
 				platform_xbox_memory_reset_for_shutdown();
 				xbox_heap_reset_for_shutdown();
 				switch2_mman_shutdown();
+				if (sockets_ready) socketExit();
 				warthog_log_close();
 				return 0;
 			}
@@ -351,6 +367,7 @@ int main(int argc, char **argv)
 	warthog_log_sync();
 	warthog_log_console("INFO", "Warthog for Switch 2 %s: log written to %s",
 		WARTHOG_SWITCH2_VERSION, "sdmc:/switch/warthog/logs/warthog.log");
+	if (sockets_ready) socketExit();
 	warthog_log_close();
 	consoleExit(NULL);
 	return 0;
