@@ -295,7 +295,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     for source in sorted((HOST_DIR).glob("*.c")):
         if source.name in {
             "switch2_tls.c", "switch2_net.c", "switch2_headless_platform.c", "switch2_sdl_headless.c",
-            "switch2_posix_compat.c", "headless_engine.c", "switch2_sdl3_bridge.c"
+            "switch2_posix_compat.c", "headless_engine.c", "switch2_sdl3_bridge.c",
+            "switch2_text_nmouse.c"
         }:
             continue
         obj = BUILD / "host" / (source.name + ".o")
@@ -303,6 +304,12 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                 implicit=[header, libounce / "include" / "switch.h"],
                 variables={"cflags": f"{code_flags} {includes}"})
         objects.append(obj)
+
+    text_nmouse = BUILD / "host/switch2_text_nmouse.c.o"
+    n.build(outputs=text_nmouse, rule="switch2_cc",
+            inputs=HOST_DIR / "switch2_text_nmouse.c",
+            variables={"cflags": f"{code_flags} {includes} -I{BUILD / 'third_party/SDL3/include'}"})
+    objects.append(text_nmouse)
 
     sdl_bridge = BUILD / "host/switch2_sdl3_bridge.c.o"
     n.build(outputs=sdl_bridge, rule="switch2_cc", inputs=HOST_DIR / "switch2_sdl3_bridge.c",

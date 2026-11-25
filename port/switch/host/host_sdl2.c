@@ -34,6 +34,7 @@ Android, each request goes to a thread that has one.
 
 #ifdef __SWITCH2__
 #include "../../switch2/host/switch2_input.h"
+#include "../../switch2/host/switch2_text_nmouse.h"
 static void rumble_stop_pad(int pad);
 #endif
 
@@ -827,6 +828,10 @@ int host_sdl_gamepad_button(uint32_t gamepad, int button)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (switch2_nmouse_suppresses_gamepad_button(0, button))
+		return 0;
+#endif
 	return object ? SDL_GameControllerGetButton(object, (SDL_GameControllerButton)button) : 0;
 }
 
@@ -1416,6 +1421,7 @@ void host_sdl_quit(void)
 	for (index = 0; index < RUMBLE_PADS; index++)
 		if (gyro_pads[index].started)
 			hidStopSixAxisSensor(gyro_pads[index].handles[gyro_pads[index].sensor]);
+	switch2_text_nmouse_stop();
 	SDL_Quit();
 }
 #endif

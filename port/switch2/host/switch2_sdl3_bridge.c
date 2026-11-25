@@ -18,6 +18,7 @@ type that carries no pointer, which covers all the platform layer reads.
 #include <pthread.h>
 #include <SDL3/SDL.h>
 #include "nx2_platform.h"
+#include "switch2_text_nmouse.h"
 
 int host_sdl_init(unsigned int flags);
 int host_sdl_set_hint(const char *name, const char *value);
@@ -92,7 +93,38 @@ void switch2_lifecycle_stop(void)
 
 bool SDL_Init(SDL_InitFlags flags)
 {
-	return host_sdl_init(flags) != 0;
+	bool ok = host_sdl_init(flags) != 0;
+	if (ok)
+		switch2_text_nmouse_start();
+	return ok;
+}
+
+bool SDL_StartTextInput(SDL_Window *window)
+{
+	(void)window;
+	return switch2_swkbd_prompt(0) != 0;
+}
+
+bool SDL_StartTextInputWithProperties(SDL_Window *window, SDL_PropertiesID props)
+{
+	SDL_TextInputType type;
+	(void)window;
+	type = (SDL_TextInputType)SDL_GetNumberProperty(props,
+		SDL_PROP_TEXTINPUT_TYPE_NUMBER, SDL_TEXTINPUT_TYPE_TEXT);
+	return switch2_swkbd_prompt(type == SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN ||
+		type == SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE) != 0;
+}
+
+bool SDL_StopTextInput(SDL_Window *window)
+{
+	(void)window;
+	return true;
+}
+
+bool SDL_TextInputActive(SDL_Window *window)
+{
+	(void)window;
+	return false;
 }
 
 
@@ -241,6 +273,7 @@ bool SDL_GL_SwapWindow(SDL_Window *window)
 bool SDL_PollEvent(SDL_Event *event)
 {
 	SDL_Event scratch;
+	switch2_text_nmouse_poll();
 	if (!appletMainLoop() && !lifecycle_quit_sent)
 		lifecycle_exit = true;
 	if (lifecycle_exit && !lifecycle_quit_sent) {
