@@ -31,6 +31,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "warthog_log.h"
 #include "headless_engine.h"
+#include "switch2_gamedata.h"
 
 /* What port/switch2/build.py generates from UPSTREAM.json: the build's
 flavor and version and the pins it was made from, so a log from a console
@@ -185,6 +186,26 @@ static void log_shader_runtime(void)
 
 extern uintptr_t warthog_engine_symbol_anchor(void);
 
+static void extraction_progress(void *ctx, int index, int count, const char *path, uint64_t done, uint64_t total)
+{
+	static int previous;
+	static int previous_percent = -1;
+	int percent = total ? (int)(done * 100 / total) : 100;
+	(void)ctx;
+	if (previous != index || previous_percent != percent)
+	{
+		printf("\rExtracting %d/%d: %s %d%%          ", index, count, path, percent);
+		consoleUpdate(NULL);
+		previous_percent = percent;
+	}
+	if (previous != index || done == total)
+	{
+		warthog_log("INFO", "Extracting %d/%d: %s %llu/%llu bytes", index, count, path,
+			(unsigned long long)done, (unsigned long long)total);
+		previous = index;
+	}
+}
+
 int main(int argc, char **argv)
 {
 	consoleInit(NULL);
@@ -225,7 +246,29 @@ int main(int argc, char **argv)
 	if (gpu_test)
 		warthog_dk_debug_callback(NULL, "self-test", DkResult_Fail, "deliberate GPU diagnostic");
 	if (!cpu_test && !gpu_test)
-		warthog_log("INFO", "headless engine status: %d", warthog_headless_engine_run());
+	{
+		char message[512];
+		int status = switch2_gamedata_prepare("sdmc:/switch/warthog", "sdmc:/switch/ChupaThingyCE",
+			0, extraction_progress, NULL, message, sizeof(message));
+		warthog_log_console(status == SWITCH2_GAMEDATA_OK ? "INFO" : "ERROR", "%s", message);
+		consoleUpdate(NULL);
+		if (status == SWITCH2_GAMEDATA_OK)
+			warthog_log("INFO", "headless engine status: %d", warthog_headless_engine_run());
+		else
+		{
+			printf("Press + to return to the homebrew menu.\n");
+			consoleUpdate(NULL);
+			PadState pad;
+			padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+			padInitializeDefault(&pad);
+			while (appletMainLoop())
+			{
+				padUpdate(&pad);
+				if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
+				consoleUpdate(NULL);
+			}
+		}
+	}
 	warthog_log("INFO", "startup complete; returning to the homebrew menu");
 	/* before the screen, which is what a player sees if the sync failed */
 	warthog_log_sync();
