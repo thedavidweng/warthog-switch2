@@ -14,6 +14,7 @@
 #include "headless_engine_checks.h"
 #include "switch2_mman.h"
 #include "warthog_log.h"
+#include "switch2_campaign.h"
 
 /* Kept in sync with the private on-disk structure in cache_files.c. */
 struct cache_file_header
@@ -41,6 +42,7 @@ void nx2ExitCleanupNow(void);
 static int check_gameplay_map(const char *root, const char *file, const char *scenario)
 {
 	char path[1024];
+	char diagnostic[256];
 	long previous_count = 0;
 	unsigned long previous_checksum = 0;
 	int failed = 0;
@@ -54,6 +56,24 @@ static int check_gameplay_map(const char *root, const char *file, const char *sc
 	{
 		warthog_log("INFO", "SKIP: headless %s not present", file);
 		return 0;
+	}
+	if (!switch2_campaign_validate_map(path, diagnostic, sizeof(diagnostic)))
+	{
+		warthog_log("ERROR", "FAIL: %s", diagnostic);
+		return 1;
+	}
+	for (size_t resource = 0; resource < 2; ++resource)
+	{
+		const char *name = resource ? "sounds.map" : "bitmaps.map";
+		unsigned type = resource ? 'snd!' : 'bitm';
+		if (snprintf(path, sizeof(path), "%s/maps/%s", root, name) >= sizeof(path))
+			return 1;
+		if (access(path, R_OK) == 0 &&
+			!switch2_campaign_validate_resource(path, type, diagnostic, sizeof(diagnostic)))
+		{
+			warthog_log("ERROR", "FAIL: %s", diagnostic);
+			return 1;
+		}
 	}
 	tag_files_open();
 	for (int pass = 0; pass < 2; ++pass)
@@ -170,6 +190,14 @@ int warthog_headless_engine_run(void)
 	}
 	failed |= check_gameplay_map(root, "bloodgulch.map", "levels\\test\\bloodgulch\\bloodgulch");
 	failed |= check_gameplay_map(root, "a10.map", "levels\\a10\\a10");
+	for (size_t i = 1; i < 10; ++i)
+	{
+		char file[32], scenario[64];
+		const char *mission = switch2_campaign_mission_id(i);
+		snprintf(file, sizeof(file), "%s.map", mission);
+		snprintf(scenario, sizeof(scenario), "levels\\%s\\%s", mission, mission);
+		failed |= check_gameplay_map(root, file, scenario);
+	}
 	thread_stop_all(200);
 	nx2ExitCleanupNow();
 	real_math_dispose();
