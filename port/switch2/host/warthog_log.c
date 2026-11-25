@@ -125,6 +125,7 @@ void warthog_dk_debug_callback(void *user_data, const char *context, DkResult re
 	raw_text(fd, "message: ");
 	raw_text(fd, message ? message : "");
 	raw_text(fd, "\n");
+	raw_field(fd, "MODULE_BASE: ", warthog_module_base());
 	raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 0);
 	fsync(fd);
 	close(fd);

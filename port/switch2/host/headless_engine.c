@@ -31,11 +31,62 @@ struct cache_file_header
 };
 _Static_assert(sizeof(XPTR(void)) == 4, "XPTR size");
 _Static_assert(sizeof(struct cache_file_header) == 0x800, "cache header");
+_Static_assert(TICKS_PER_SECOND == 30, "Halo simulation rate must remain 30 Hz");
 
 void platform_xbox_memory_reset_for_shutdown(void);
 void xbox_heap_reset_for_shutdown(void);
 const char *platform_data_root(void);
 void nx2ExitCleanupNow(void);
+
+static int check_gameplay_map(const char *root, const char *file, const char *scenario)
+{
+	char path[1024];
+	long previous_count = 0;
+	unsigned long previous_checksum = 0;
+	int failed = 0;
+
+	if (snprintf(path, sizeof(path), "%s/maps/%s", root, file) >= sizeof(path))
+	{
+		warthog_log("ERROR", "FAIL: headless %s path too long", file);
+		return 1;
+	}
+	if (access(path, R_OK) != 0)
+	{
+		warthog_log("INFO", "SKIP: headless %s not present", file);
+		return 0;
+	}
+	tag_files_open();
+	for (int pass = 0; pass < 2; ++pass)
+	{
+		long scnr = scenario_tags_load(scenario), count = 0;
+		unsigned long checksum;
+		struct tag_iterator it;
+		if (scnr == NONE)
+		{
+			failed = 1;
+			break;
+		}
+		checksum = tag_groups_checksum();
+		tag_iterator_new(&it, NONE);
+		while (tag_iterator_next(&it) != NONE)
+			++count;
+		if (!tag_get('scnr', scnr) || !count || !checksum ||
+			(pass && (count != previous_count || checksum != previous_checksum)))
+			failed = 1;
+		previous_count = count;
+		previous_checksum = checksum;
+		scenario_tags_unload();
+		if (failed)
+			break;
+	}
+	tag_files_close();
+	if (failed)
+		warthog_log("ERROR", "FAIL: headless %s repeated load", file);
+	else
+		warthog_log("INFO", "PASS: headless %s loaded twice (tags=%ld, checksum=%#lx)",
+			file, previous_count, previous_checksum);
+	return failed;
+}
 
 int warthog_headless_engine_run(void)
 {
@@ -75,6 +126,13 @@ int warthog_headless_engine_run(void)
 	}
 	else
 		warthog_log("INFO", "PASS: headless deterministic math");
+	if (!warthog_verify_simulation_ticks())
+	{
+		failed = 1;
+		warthog_log("ERROR", "FAIL: headless 30 Hz simulation");
+	}
+	else
+		warthog_log("INFO", "PASS: headless 30 Hz simulation");
 
 	if (snprintf(ui_path, sizeof(ui_path), "%s/maps/ui.map", root) >= sizeof(ui_path))
 	{
@@ -109,9 +167,11 @@ int warthog_headless_engine_run(void)
 		if (scnr == NONE || !count || !checksum)
 			warthog_log("ERROR", "FAIL: headless ui.map load");
 		tag_files_close();
-		thread_stop_all(200);
-		nx2ExitCleanupNow();
 	}
+	failed |= check_gameplay_map(root, "bloodgulch.map", "levels\\test\\bloodgulch\\bloodgulch");
+	failed |= check_gameplay_map(root, "a10.map", "levels\\a10\\a10");
+	thread_stop_all(200);
+	nx2ExitCleanupNow();
 	real_math_dispose();
 	errors_dispose();
 	cseries_dispose();
