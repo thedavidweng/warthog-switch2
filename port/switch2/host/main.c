@@ -39,7 +39,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "switch2_update.h"
 
 extern int halo_main(void);
-void host_dk_idle(void);
+void host_dk_shutdown(void);
 void host_sdl_quit(void);
 void platform_xbox_memory_reset_for_shutdown(void);
 void xbox_heap_reset_for_shutdown(void);
@@ -319,7 +319,7 @@ int main(int argc, char **argv)
 				warthog_log_sync();
 				consoleExit(NULL);
 				halo_main();
-				host_dk_idle();
+				host_dk_shutdown();
 				host_sdl_quit();
 				switch2PlatformRestoreClock();
 				nx2ExitCleanupNow();

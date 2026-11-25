@@ -291,6 +291,9 @@ the frame's DK_COMMAND_PICTURE; the slot the copy went to, or -1 */
 int host_dk_picture(dk_addr_t rgba, unsigned int width, unsigned int height);
 /* the queue drained (a map is going, or the process is exiting) */
 void host_dk_idle(void);
+#ifdef __SWITCH2__
+void host_dk_shutdown(void);
+#endif
 /* set once deko3d has presented a frame, after which its swapchain paces
 the frames, not the stand-in window's swap */
 extern int host_dk_presenting;

@@ -2539,22 +2539,22 @@ static void textures_fence(int before_writes)
 out of its image, waiting for the GPU, and says where they differ from the
 game's bytes; whether the copy into the image is right, or the fault is in
 how the image is sampled */
+static DkMemBlock texture_verify_readback;
 static void texture_verify(struct texture *texture, const struct dk_command_texture *command)
 {
-	static DkMemBlock readback;
 	static void *readback_cpu;
 	static DkGpuAddr readback_gpu;
 	static unsigned long verified, mismatched;
 	uint32_t faces = command->kind == DK_TEXTURE_CUBE ? 6 : 1;
 	uint32_t face, level;
 
-	if (!readback)
+	if (!texture_verify_readback)
 	{
-		readback = memory_block(STAGING_SLICE_SIZE, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, NULL);
-		if (!readback)
+		texture_verify_readback = memory_block(STAGING_SLICE_SIZE, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, NULL);
+		if (!texture_verify_readback)
 			return;
-		readback_cpu = dkMemBlockGetCpuAddr(readback);
-		readback_gpu = dkMemBlockGetGpuAddr(readback);
+		readback_cpu = dkMemBlockGetCpuAddr(texture_verify_readback);
+		readback_gpu = dkMemBlockGetGpuAddr(texture_verify_readback);
 	}
 	if (command->source_bytes > STAGING_SLICE_SIZE)
 		return;
@@ -4499,6 +4499,10 @@ static struct
 		uint32_t capacity, size;
 	} streams[RENDER_QUEUE];
 } render_queue = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER };
+#ifdef __SWITCH2__
+static pthread_t render_thread_id, watchdog_thread_id;
+static int render_stop, watchdog_started;
+#endif
 
 /* (read without the lock: the watchdog's look) */
 static uint32_t render_queued(void)
@@ -4593,7 +4597,15 @@ static void *render_watchdog(void *unused)
 	(void)unused;
 	for (;;)
 	{
+#ifdef __SWITCH2__
+		for (int i = 0; i < 10; i++)
+		{
+			if (__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE)) return NULL;
+			svcSleepThread(100000000LL);
+		}
+#else
 		svcSleepThread(1000000000LL);
+#endif
 		watchdog_lock_and_gpu();
 		if (render_progress != seen || !render_queued())
 		{
@@ -4620,18 +4632,34 @@ static void *render_thread(void *unused)
 	host_thread_place_on_helper_core();
 	render_handle = threadGetCurHandle();
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&watchdog_thread_id, NULL, render_watchdog, NULL) == 0)
+			watchdog_started = 1;
+#else
 		pthread_t watchdog;
 
 		if (pthread_create(&watchdog, NULL, render_watchdog, NULL) == 0)
 			pthread_detach(watchdog);
+#endif
 	}
 	for (;;)
 	{
 		unsigned index;
 
 		pthread_mutex_lock(&render_queue.lock);
-		while (!render_queue.count)
+		while (!render_queue.count
+#ifdef __SWITCH2__
+			&& !__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE)
+#endif
+		)
 			pthread_cond_wait(&render_queue.work, &render_queue.lock);
+#ifdef __SWITCH2__
+		if (__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE))
+		{
+			pthread_mutex_unlock(&render_queue.lock);
+			break;
+		}
+#endif
 		index = render_queue.head;
 		pthread_mutex_unlock(&render_queue.lock);
 		render_where = "running a stream";
@@ -4654,20 +4682,28 @@ be made (the stream is then run on the game thread) */
 static int render_thread_start(void)
 {
 	pthread_attr_t attributes;
+#ifndef __SWITCH2__
 	pthread_t thread;
+#endif
 
 	if (render_queue.started || render_queue.failed)
 		return render_queue.started;
 	pthread_attr_init(&attributes);
 	pthread_attr_setstacksize(&attributes, RENDER_THREAD_STACK);
+#ifdef __SWITCH2__
+	if (pthread_create(&render_thread_id, &attributes, render_thread, NULL) != 0)
+#else
 	if (pthread_create(&thread, &attributes, render_thread, NULL) != 0)
+#endif
 	{
 		host_logf(HOST_LOG_ERROR, "deko3d: the render thread could not be made; the game thread runs the commands");
 		render_queue.failed = 1;
 	}
 	else
 	{
+#ifndef __SWITCH2__
 		pthread_detach(thread);
+#endif
 		render_queue.started = 1;
 		host_logf(HOST_LOG_INFO, "deko3d: a render thread runs the commands (%d streams queued at most)", RENDER_QUEUE);
 	}
@@ -4685,6 +4721,63 @@ static void render_queue_drain(void)
 		pthread_cond_wait(&render_queue.room, &render_queue.lock);
 	pthread_mutex_unlock(&render_queue.lock);
 }
+
+#ifdef __SWITCH2__
+void host_dk_shaders_shutdown(void);
+void host_dk_hud_shutdown(void);
+void host_dk_compiler_shutdown(void);
+
+void host_dk_shutdown(void)
+{
+	unsigned i;
+
+	if (render_queue.started)
+	{
+		render_queue_drain();
+		pthread_mutex_lock(&render_queue.lock);
+		__atomic_store_n(&render_stop, 1, __ATOMIC_RELEASE);
+		pthread_cond_broadcast(&render_queue.work);
+		pthread_mutex_unlock(&render_queue.lock);
+		pthread_join(render_thread_id, NULL);
+		if (watchdog_started) pthread_join(watchdog_thread_id, NULL);
+		render_queue.started = 0;
+	}
+	host_dk_hud_shutdown();
+	if (dk.queue) dkQueueWaitIdle(dk.queue);
+	host_dk_shaders_shutdown();
+	host_dk_compiler_shutdown();
+	if (!dk.device) return;
+	if (dk.commands) dkCmdBufDestroy(dk.commands);
+	if (dk.timing_commands) dkCmdBufDestroy(dk.timing_commands);
+	if (dk.swapchain) dkSwapchainDestroy(dk.swapchain);
+	nwindowReleaseBuffers(nwindowGetDefault());
+	if (dk.queue) dkQueueDestroy(dk.queue);
+	for (i = 0; i < hud_source_count; i++)
+	{
+		if (hud_sources[i].memory) dkMemBlockDestroy(hud_sources[i].memory);
+		free(hud_sources[i].texels);
+	}
+	for (i = 0; i < (unsigned)dk.window_chunk_count; i++)
+		if (dk.window_chunks[i].block) dkMemBlockDestroy(dk.window_chunks[i].block);
+	for (i = 0; i < (unsigned)dk.image_block_count; i++)
+		if (dk.image_blocks[i].memory) dkMemBlockDestroy(dk.image_blocks[i].memory);
+	for (i = 0; i < tex.block_count; i++)
+		if (tex.blocks[i].memory) dkMemBlockDestroy(tex.blocks[i].memory);
+	DkMemBlock blocks[] = { dk.command_memory, dk.timing_memory, dk.screen_memory,
+		dk.upload_memory, dk.uniform_memory, dk.readback_memory, tex.image_descriptors,
+		tex.sampler_descriptors, tex.staging_memory, trace.memory, profile.memory,
+		capture.memory, visibility_memory, texture_verify_readback };
+	for (i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++)
+		if (blocks[i]) dkMemBlockDestroy(blocks[i]);
+	if (dk.nv_ready) nvAddressSpaceClose(&dk.test_address_space);
+	dkDeviceDestroy(dk.device);
+	if (dk.ready) nvMapExit();
+	free(trace.events);
+	for (i = 0; i < PICTURE_SLOTS; i++) free(picture.slots[i].data);
+	for (i = 0; i < RENDER_QUEUE; i++) free(render_queue.streams[i].data);
+	memset(&dk, 0, sizeof(dk));
+}
+#endif
 
 void host_dk_submit(dk_addr_t commands, uint32_t size)
 {

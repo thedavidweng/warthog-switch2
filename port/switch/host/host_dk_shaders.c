@@ -200,6 +200,11 @@ static struct
 	pthread_cond_t queue_condition;
 
 	int started;
+#ifdef __SWITCH2__
+	int stopping;
+	pthread_t workers[DKSH_COMPILE_THREADS], writer, loader;
+	int writer_started;
+#endif
 	/* the set of shaders known: on the card or loaded. Linear probing;
 	0 marks an empty slot, and no hash is 0 (FNV-1a never returns it) */
 	struct dksh_slot set[DKSH_SET_SLOTS];
@@ -944,8 +949,19 @@ static void *compile_thread(void *context)
 		int ok;
 
 		pthread_mutex_lock(&dksh.lock);
-		while (!dksh.queue_count)
+		while (!dksh.queue_count
+#ifdef __SWITCH2__
+			&& !dksh.stopping
+#endif
+		)
 			pthread_cond_wait(&dksh.queue_condition, &dksh.lock);
+#ifdef __SWITCH2__
+		if (dksh.stopping)
+		{
+			pthread_mutex_unlock(&dksh.lock);
+			break;
+		}
+#endif
 		/* the most urgent entry: the lowest priority, the first queued
 		among equals */
 		pick = 0;
@@ -1180,7 +1196,18 @@ static void *writer_thread(void *unused)
 	{
 		unsigned written = 0, failed = 0;
 
+#ifdef __SWITCH2__
+		for (int i = 0; i < DKSH_WRITE_INTERVAL * 10; i++)
+		{
+			usleep(100000);
+			pthread_mutex_lock(&dksh.lock);
+			int stop = dksh.stopping;
+			pthread_mutex_unlock(&dksh.lock);
+			if (stop) return NULL;
+		}
+#else
 		sleep(DKSH_WRITE_INTERVAL);
+#endif
 		for (;;)
 		{
 			struct dksh_pending pending;
@@ -1267,11 +1294,15 @@ static void service_start(void)
 		core: host_thread.c) */
 		for (index = 0; index < DKSH_COMPILE_THREADS; index++)
 		{
+#ifdef __SWITCH2__
+			if (pthread_create(&dksh.workers[index], &attributes, compile_thread, (void *)(intptr_t)index) != 0)
+				break;
+#else
 			pthread_t thread;
-
 			if (pthread_create(&thread, &attributes, compile_thread, (void *)(intptr_t)index) != 0)
 				break;
 			pthread_detach(thread);
+#endif
 			dksh.compile_threads++;
 		}
 		if (!dksh.compile_threads)
@@ -1282,23 +1313,33 @@ static void service_start(void)
 				HOST_DK_UAM_COMMIT);
 	}
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&dksh.writer, &attributes, writer_thread, NULL) == 0)
+			dksh.writer_started = 1;
+		else
+#else
 		pthread_t writer;
-
 		if (pthread_create(&writer, &attributes, writer_thread, NULL) == 0)
 			pthread_detach(writer);
 		else
+#endif
 			host_logf(HOST_LOG_ERROR, "dk shader: the writer thread could not be made; compiled shaders are kept "
 				"for this run only");
 	}
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&dksh.loader, &attributes, loader_thread, NULL) == 0)
+			dksh.loader_started = 1;
+		else
+#else
 		pthread_t loader;
-
 		if (pthread_create(&loader, &attributes, loader_thread, NULL) == 0)
 		{
 			pthread_detach(loader);
 			dksh.loader_started = 1;
 		}
 		else
+#endif
 			host_logf(HOST_LOG_WARN, "dk shader: the loader thread could not be made; shaders are loaded on the "
 				"game thread");
 	}
@@ -1571,8 +1612,19 @@ static void *loader_thread(void *unused)
 		u64 started_ns;
 
 		pthread_mutex_lock(&dksh.lock);
-		while (!dksh.load_count)
+		while (!dksh.load_count
+#ifdef __SWITCH2__
+			&& !dksh.stopping
+#endif
+		)
 			pthread_cond_wait(&dksh.load_condition, &dksh.lock);
+#ifdef __SWITCH2__
+		if (dksh.stopping)
+		{
+			pthread_mutex_unlock(&dksh.lock);
+			break;
+		}
+#endif
 		hash = dksh.load_queue[0].hash;
 		stage = dksh.load_queue[0].stage;
 		memmove(&dksh.load_queue[0], &dksh.load_queue[1], (dksh.load_count - 1) * sizeof(dksh.load_queue[0]));
@@ -1623,6 +1675,33 @@ static void *loader_thread(void *unused)
 	}
 	return NULL;
 }
+
+#ifdef __SWITCH2__
+void host_dk_shaders_shutdown(void)
+{
+	uint32_t index;
+	if (!dksh.started) return;
+	pthread_mutex_lock(&dksh.lock);
+	dksh.stopping = 1;
+	pthread_cond_broadcast(&dksh.queue_condition);
+	pthread_cond_broadcast(&dksh.load_condition);
+	pthread_mutex_unlock(&dksh.lock);
+	for (int i = 0; i < dksh.compile_threads; i++)
+		pthread_join(dksh.workers[i], NULL);
+	if (dksh.loader_started) pthread_join(dksh.loader, NULL);
+	if (dksh.writer_started) pthread_join(dksh.writer, NULL);
+	for (index = 0; index < dksh.queue_count; index++) free(dksh.queue[index].glsl);
+	for (index = 0; index < dksh.pending_count; index++) free(dksh.pending[index].data);
+	free(dksh.queue);
+	free(dksh.pending);
+	if (dksh.pack) fclose(dksh.pack);
+	if (dksh.code_memory) dkMemBlockDestroy(dksh.code_memory);
+	pthread_cond_destroy(&dksh.queue_condition);
+	pthread_cond_destroy(&dksh.load_condition);
+	pthread_mutex_destroy(&dksh.lock);
+	memset(&dksh, 0, sizeof(dksh));
+}
+#endif
 
 /* ---------- the imports (the game thread) */
 

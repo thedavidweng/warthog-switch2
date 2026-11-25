@@ -25,3 +25,12 @@ int host_dk_compile_glsl(int fragment, const char *glsl, void **dksh, size_t *dk
 	free(message);
 	return *dksh != NULL;
 }
+
+void host_dk_compiler_shutdown(void)
+{
+	if (compiler_ready)
+	{
+		uam2rt_exit();
+		compiler_ready = 0;
+	}
+}

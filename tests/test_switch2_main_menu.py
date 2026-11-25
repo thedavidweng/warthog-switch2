@@ -19,7 +19,7 @@ class MainMenuLinkTest(unittest.TestCase):
         self.assertTrue((out / "warthog.nro").is_file())
         self.assertTrue((out / "warthog.elf").is_file())
         linkmap = (out / "warthog.elf.map").read_text()
-        for name in ("libSDL2_host.a", "libdrako3d.a", "libuam2rt.a",
+        for name in ("libSDL2_host.a", "libdrako3dd.a", "libuam2rt.a",
                      "d3d8_dk.o", "nv2a_vsh_dk.o", "nv2a_psh_dk.o",
                      "host_dk.c.o", "host_sdl2.c.o", "host_sdl3_events.c.o"):
             self.assertIn(name, linkmap)
@@ -32,7 +32,7 @@ class MainMenuLinkTest(unittest.TestCase):
             cwd=ROOT, check=True, capture_output=True, text=True,
         )
         symbols = {line.split()[-1] for line in result.stdout.splitlines() if line.split()}
-        self.assertTrue({"halo_main", "D3DDevice_Present", "host_dk_submit",
+        self.assertTrue({"halo_main", "D3DDevice_Present", "host_dk_submit", "host_dk_shutdown",
                          "SDL_OpenAudioDeviceStream", "sdl2_host_SDL_Init"} <= symbols)
 
 

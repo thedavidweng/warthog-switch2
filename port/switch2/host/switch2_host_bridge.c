@@ -72,7 +72,7 @@ void host_ui_message(const char *title, const char *message, const char *const *
 void host_sdl_quit(void);
 void host_exit(int code)
 {
-	host_dk_idle();
+	host_dk_shutdown();
 	host_sdl_quit();
 	switch2PlatformRestoreClock();
 	nx2ExitCleanupNow();
