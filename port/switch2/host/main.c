@@ -36,6 +36,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "switch2_gamedata.h"
 #include "switch2_mman.h"
 #include "nx2_platform.h"
+#include "switch2_lifecycle.h"
 #include "switch2_update.h"
 
 extern int halo_main(void);
@@ -43,6 +44,9 @@ void host_dk_shutdown(void);
 void host_sdl_quit(void);
 void platform_xbox_memory_reset_for_shutdown(void);
 void xbox_heap_reset_for_shutdown(void);
+void switch2_lifecycle_start(void);
+void switch2_lifecycle_stop(void);
+void switch2_lifecycle_cleanup(void);
 
 /* What port/switch2/build.py generates from UPSTREAM.json: the build's
 flavor and version and the pins it was made from, so a log from a console
@@ -253,24 +257,20 @@ static void extraction_progress(void *ctx, int index, int count, const char *pat
 int main(int argc, char **argv)
 {
 	if (!switch2_update_finish_pending(WARTHOG_SWITCH2_CARD_DIR))
+	{
+		switch2PlatformRestoreClock();
 		return 1;
+	}
 	consoleInit(NULL);
 	if (!warthog_log_open())
 	{
 		/* nothing can be logged, so the screen is the only report */
 		printf("Warthog for Switch 2: cannot write sdmc:/switch/warthog/logs/warthog.log\n");
 		consoleExit(NULL);
+		switch2PlatformRestoreClock();
 		return 1;
 	}
 	warthog_log("INFO", "--- launch ---");
-	if (HALO_BUILD_NUMBER > 0) {
-		char update_error[256];
-		int result = switch2_update_check(WARTHOG_SWITCH2_CARD_DIR, WARTHOG_SWITCH2_FLAVOR,
-		                                  HALO_BUILD_NUMBER, update_http, NULL,
-		                                  update_error, sizeof(update_error));
-		if (result < 0) warthog_log("WARN", "update: %s", update_error);
-		else if (result > 0) warthog_log("INFO", "update installed; restart to use it");
-	}
 	warthog_log("INFO", "engine symbol anchor: %zx", (size_t)warthog_engine_symbol_anchor());
 	log_build();
 	log_launch_context();
@@ -279,6 +279,40 @@ int main(int argc, char **argv)
 	log_syscalls();
 	log_memory();
 	log_renderer();
+	AppletType type = appletGetAppletType();
+	bool restricted = type == AppletType_LibraryApplet || type == AppletType_SystemApplet ||
+		type == AppletType_OverlayApplet;
+	u64 available = heapGetTotalSize();
+	warthog_log("INFO", "memory budget: %llu bytes of heap", (unsigned long long)available);
+	if (switch2_lifecycle_refuse_launch(restricted, available))
+	{
+		warthog_log_console("ERROR", "Restricted applet mode or insufficient memory. Launch Warthog using title takeover "
+			"(full-memory Application mode) under kaiHEN.");
+		printf("Press + or B to return to the homebrew menu.\n");
+		consoleUpdate(NULL);
+		PadState pad;
+		padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+		padInitializeDefault(&pad);
+		while (appletMainLoop())
+		{
+			padUpdate(&pad);
+			if (padGetButtonsDown(&pad) & (HidNpadButton_Plus | HidNpadButton_B)) break;
+			consoleUpdate(NULL);
+		}
+		switch2PlatformRestoreClock();
+		nx2ExitCleanupNow();
+		warthog_log_close();
+		consoleExit(NULL);
+		return 1;
+	}
+	if (HALO_BUILD_NUMBER > 0) {
+		char update_error[256];
+		int result = switch2_update_check(WARTHOG_SWITCH2_CARD_DIR, WARTHOG_SWITCH2_FLAVOR,
+		                                  HALO_BUILD_NUMBER, update_http, NULL,
+		                                  update_error, sizeof(update_error));
+		if (result < 0) warthog_log("WARN", "update: %s", update_error);
+		else if (result > 0) warthog_log("INFO", "update installed; restart to use it");
+	}
 	log_shader_runtime();
 	const char *trigger = "sdmc:/switch/warthog/trigger_fault.txt";
 	bool cpu_test = false, gpu_test = false, headless_check = false;
@@ -318,11 +352,11 @@ int main(int argc, char **argv)
 				warthog_log("INFO", "maps/ui.map ready; releasing console and entering Halo main menu via Drako3D");
 				warthog_log_sync();
 				consoleExit(NULL);
+				switch2PlatformDisplayInit();
+				switch2_lifecycle_start();
+				atexit(switch2_lifecycle_cleanup);
 				halo_main();
-				host_dk_shutdown();
-				host_sdl_quit();
-				switch2PlatformRestoreClock();
-				nx2ExitCleanupNow();
+				switch2_lifecycle_cleanup();
 				platform_xbox_memory_reset_for_shutdown();
 				xbox_heap_reset_for_shutdown();
 				switch2_mman_shutdown();
@@ -353,5 +387,7 @@ int main(int argc, char **argv)
 		WARTHOG_SWITCH2_VERSION, "sdmc:/switch/warthog/logs/warthog.log");
 	warthog_log_close();
 	consoleExit(NULL);
+	nx2ExitCleanupNow();
+	switch2PlatformRestoreClock();
 	return 0;
 }

@@ -70,12 +70,22 @@ void host_ui_message(const char *title, const char *message, const char *const *
 	host_logf(HOST_LOG_WARN, "%s: %s", title, message);
 }
 void host_sdl_quit(void);
-void host_exit(int code)
+void switch2_lifecycle_stop(void);
+void switch2_lifecycle_cleanup(void)
 {
+	static int cleaned;
+	if (cleaned) return;
+	cleaned = 1;
+	switch2_lifecycle_stop();
 	host_dk_shutdown();
 	host_sdl_quit();
-	switch2PlatformRestoreClock();
+	switch2PlatformReleaseWindow();
 	nx2ExitCleanupNow();
+	switch2PlatformRestoreClock();
+}
+void host_exit(int code)
+{
+	switch2_lifecycle_cleanup();
 	warthog_log_close();
 	exit(code);
 }
