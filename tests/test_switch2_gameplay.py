@@ -15,6 +15,107 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class DescriptorOrderingTest(unittest.TestCase):
+    def test_nv2a_generators_compile_to_ampere_dksh(self):
+        xdk = (ROOT / "chupathingyce/port/include/xdk/xdk_pdb.h").read_text()
+        # Each enum has its own namespace; their values come from the engine.
+        enums = "\n".join(
+            "enum " + name + " {" + xdk.split("enum " + name + " {", 1)[1].split("};", 1)[0] + "};"
+            for name in ("_D3DRENDERSTATETYPE", "_D3DCMPFUNC", "_D3DFOGMODE")
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            root = pathlib.Path(directory)
+            rel = root.relative_to(ROOT)
+            shim = r"""
+#include <stdint.h>
+#define __HALO_LINUX_XGPU_H
+typedef uint32_t DWORD;
+typedef int BOOL;
+#define TRUE 1
+#define FALSE 0
+""" + enums + r"""
+#define XGPU_VERTEX_ATTRIBUTE_COUNT 16
+#define XGPU_VERTEX_CONSTANT_COUNT 192
+#define XGPU_VERTEX_CONSTANT_BIAS 96
+enum { _xgpu_sampler_none, _xgpu_sampler_2d, _xgpu_sampler_3d, _xgpu_sampler_cube };
+struct xgpu_text { char *buffer; unsigned long length, capacity; };
+void xgpu_text_append(struct xgpu_text *, const char *, ...);
+#include "nv2a_pixel_key.h"
+"""
+            (root / "shim.h").write_text(shim)
+            (root / "driver.c").write_text(r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "dk_shaders.h"
+int config_boolean(const char *key) { (void)key; return 0; }
+const char *config_string(const char *key) { (void)key; return ""; }
+int main(int argc, char **argv) {
+    if (argc != 3) return 1;
+    char path[512], *glsl;
+    int which = atoi(argv[1]);
+    if (which < 2) {
+        uint32_t instructions[] = { 0, (1u << 21) | 0x1b, 2u << 26,
+                                    (15u << 12) | (1u << 11) | 1u };
+        if (which) instructions[1] |= 1u << 9;
+        glsl = nv2a_dk_vertex_shader_to_glsl(instructions, 1, which ? 2 : 0);
+    } else {
+        struct nv2a_pixel_shader_key key = {0};
+        key.sampler_type[0] = _xgpu_sampler_2d;
+        key.sampler_type[1] = _xgpu_sampler_2d;
+        key.texture_modes = 1 | (1 << 5);
+        key.combiner_state[D3DRS_PSCOMBINERCOUNT] = 2;
+        key.combiner_state[D3DRS_PSRGBINPUTS0] = (8u << 24) | (9u << 16);
+        key.combiner_state[D3DRS_PSRGBOUTPUTS0] = 12u << 4;
+        key.combiner_state[D3DRS_PSRGBINPUTS0 + 1] = (12u << 24) | (4u << 16);
+        key.combiner_state[D3DRS_PSRGBOUTPUTS0 + 1] = 12u << 4;
+        key.fog_enable = 1; key.fog_table_mode = D3DFOG_LINEAR;
+        if (which == 3) key.texture_modes |= NV2A_PIXEL_KEY_CLIP;
+        if (which == 4) key.texture_modes |= NV2A_PIXEL_KEY_WARP_BLEND;
+        glsl = nv2a_dk_pixel_shader_to_glsl(&key);
+    }
+    if (!glsl) return 2;
+    snprintf(path, sizeof(path), "%s/%d.glsl", argv[2], which);
+    FILE *file = fopen(path, "w");
+    if (!file) return 3;
+    fputs(glsl, file); fclose(file); free(glsl);
+    return 0;
+}
+""")
+            guest = ROOT / "port/switch/guest"
+            linux = ROOT / "chupathingyce/port/linux/src"
+            subprocess.run(
+                ["clang", "-std=c11", "-include", str(root / "shim.h"),
+                 "-I", str(guest), "-I", str(linux),
+                 str(root / "driver.c"), str(guest / "nv2a_vsh_dk.c"),
+                 str(guest / "nv2a_psh_dk.c"), str(linux / "xgpu_text.c"),
+                 "-o", str(root / "driver")], cwd=ROOT, check=True)
+            for number in range(5):
+                subprocess.run([str(root / "driver"), str(number), str(root)], check=True)
+                glsl = (root / f"{number}.glsl").read_text()
+                self.assertTrue(glsl.startswith("#version 460\n"))
+                if number == 1:
+                    self.assertIn("unpack_normpacked3(v1_packed)", glsl)
+                    self.assertNotEqual(glsl, (root / "0.glsl").read_text())
+                if number == 2:
+                    self.assertIn("combiner stage 1", glsl)
+                    self.assertIn("fog_parameters.y - xFog", glsl)
+                if number == 3:
+                    self.assertIn("clip_uv", glsl)
+                if number == 4:
+                    self.assertIn("warp_spread", glsl)
+                stage = "vert" if number < 2 else "frag"
+                subprocess.run(
+                    [str(ROOT / "scripts/switch2/build.sh"), "uam2", "-s", stage,
+                     "-o", str(rel / f"{number}.dksh"), "--asm=" + str(rel / f"{number}.asm"),
+                     str(rel / f"{number}.glsl")], cwd=ROOT, check=True)
+                magic, _, control, code, _, count = struct.unpack_from(
+                    "<6I", (root / f"{number}.dksh").read_bytes())
+                self.assertEqual(magic, 0x48534B44)
+                self.assertGreater(control, 0)
+                self.assertGreater(code, 0)
+                self.assertEqual(count, 1)
+                self.assertTrue((root / f"{number}.asm").read_text().strip())
+
     def test_uam2_ampere_macro_and_binary(self):
         if not shutil.which("docker"):
             self.skipTest("Docker unavailable")
