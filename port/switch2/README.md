@@ -63,16 +63,21 @@ default). On a host with the same packages installed, `WARTHOG_SWITCH2_NATIVE=1`
 runs the commands there instead; inside the image it is detected, so the
 script does not try to nest Docker.
 
-## What the program does
+## What the platform layer provides
 
-`host/main.c` is the startup program ticket #3 asks for: it launches, appears
-in hbmenu with its name, icon, author and version, writes a log under
-`sdmc:/switch/warthog/logs`, and returns to hbmenu cleanly. It draws nothing
-and plays nothing. What it records is what the console granted the process:
-the applet type and operation mode, the firmware, the core mask, the heap,
-whether each syscall the original Switch port used is hinted, that UAM2's
-runtime initialises, and that Drako3D is linked. That log is the evidence the
-later tickets are decided on.
+`host/` contains the startup and lifecycle adapters. `overrides/` carries
+Switch 2-only source replacements, `sdl2_namespace.py` isolates host SDL2
+symbols, and `switch2_sdl3_bridge.c` answers the SDL3 seam. The build exposes
+`switch2-probe-abi`, `switch2-probe-sdl` and `switch2-probe-gfx` targets for
+ABI, input and graphics checks. Debug builds retain development diagnostics;
+`--release` disables development profiling while retaining matching symbols.
+
+Package a build with `python3 tools/switch_package.py --target switch2` and
+validate it with `python3 tools/switch2_audit.py`. The resulting NRO records
+the applet type, operation mode, firmware, core mask, heap, optional syscall
+hints, UAM2 runtime state and Drako3D linkage in
+`sdmc:/switch/warthog/logs`. It returns to hbmenu after releasing lifecycle,
+window, HID and audio resources.
 
 Every question it asks is read-only. The syscalls kaiHEN does not grant are
 asked about with `envIsSyscallHinted` and never called, because an ungranted
@@ -96,8 +101,7 @@ itself a fault; the Switch 1 GPU libraries are caught by name.
 ## On the console
 
 ```sh
-python3 tools/switch_deploy.py --host <switch2-ip> --port <port> \
-  --destination /switch/warthog build/switch2/warthog.nro
+python3 tools/switch_deploy.py --target switch2 --build
 ```
 
 `WARTHOG_SWITCH2_HOST` and `WARTHOG_SWITCH2_PORT` carry the console's address,
@@ -105,8 +109,8 @@ so no command line and no committed file has to. The log comes back with
 `tools/switch_logs.py`, and a crash is symbolized against the matching
 unstripped ELF.
 
-Nothing here is `Tested on hardware` yet: the program is `Compiled`, and what
-it reports on a console is ticket #3's remaining evidence.
+The build and package are `Tested on host`. Interactive rendering, input and
+lifecycle evidence remains `Tested on hardware` work.
 
 ## Third-party notices
 

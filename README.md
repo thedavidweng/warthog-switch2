@@ -34,32 +34,24 @@ Nintendo's SDK is used.
 
 ## Status
 
-**Pre-release. The Switch 2 build is under active development and is not yet
-released.** Nothing here is a promise that the port runs a full campaign
-today. This table is the current verification state, using the status words
-defined in [GLOSSARY.md](GLOSSARY.md); each claim is only as strong as the
-evidence behind it.
+**Pre-release.** The build and package have been verified on the host, but
+interactive campaign, rendering, input and lifecycle verification on a Switch
+2 is still required before cutting the first public `v<version>` tag on
+`main`. The detailed evidence and remaining gaps are in
+[docs/status-matrix.md](docs/status-matrix.md).
 
 | Area | Status |
 |---|---|
-| Upstream Switch port (`ninja switch`) | Implemented — upstream's code, untouched by this repository |
-| Switch 2 toolchain, `ninja switch2`, packaging | Compiled — the program builds, links and passes the artifact audit; not yet run on a console |
-| Drako3D renderer and Ampere shader compilation | Not yet supported — in progress |
-| Gameplay, campaign, multiplayer on Switch 2 | Not yet supported |
-| Switch 2 display modes (1080p120 handheld, 4K60 / 1440p120 docked, VRR) | Not yet supported |
-| Joy-Con 2 `Nmouse` aiming | Not yet supported |
-| GameShare local multiplayer | Implemented; console matchmaking and guest streaming pending Tested on hardware |
+| Upstream Switch port (`ninja switch`) | Implemented — upstream code carried forward intact; host configuration verified |
+| Switch 2 toolchain, `ninja switch2`, Debug/Release packaging and `OUN0` audit | Tested on host — pinned `ounce-devkit` build, package and audit pass; FTP deployment verified, interactive launch pending Tested on hardware |
+| Native LP64 engine and memory model (ADR-0001) | Tested on host — source rewrite, `[0x40000000, 0xa0000000)` `StackRegion`, atomic `.part` saves and checkpoint relocation; console probe pending Tested on hardware |
+| Drako3D, Ampere `DEKO3D=200`, UAM2 and persistent shader cache (ADRs 0002, 0004) | Tested on host — VI2, cache barriers, five-part cache key, CRC recovery and compile progress; console rendering pending Tested on hardware |
+| Campaign, multiplayer, 4-player split-screen, Custom Edition and extraction | Tested on host — XISO extraction, map reuse, 10 campaign missions, TLS networking and 1–4P viewports; console playtesting pending Tested on hardware |
+| Display modes, 120 Hz, VRR, Smooth Motion and 4K60 | Tested on host — present-interval readback and strict 4K60 clamp; display verification pending Tested on hardware |
+| Controllers, gyro, `swkbd`, USB/BT KBM and Joy-Con 2 `Nmouse` | Tested on host — input deduplication and graceful HID refusal; console input verification pending Tested on hardware |
+| GameShare local multiplayer | Tested on host — `Mirror` and dual-swapchain `SeparateViews` on `player1`; two-console testing pending Tested on hardware |
+| Halo: The Master Chief Collection maps | Not yet supported — see [docs/mcc-investigation.md](docs/mcc-investigation.md) |
 
-Nothing here has been run on Switch 2 hardware yet. The upstream Switch port is
-carried in this repository untouched, which is not the same as this fork having
-rebuilt it. The Switch 2 build graph, renderer and platform work are being
-added under the tickets of
-[issue #1](https://github.com/thedavidweng/warthog-switch2/issues/1), and each
-row above moves up a level only when the evidence behind it exists.
-
-There is no download yet. When a build is published it will be a Switch 2
-`OUN0` NRO with valid NACP metadata, no proprietary assets, and a
-feature-status matrix carrying the same evidence standard as this table.
 
 ## What you need
 
@@ -82,31 +74,29 @@ implemented.
 
 ## Installation
 
-Not available yet. The layout the port installs to, and the one a release
-will use, is:
+1. Unpack `warthog-switch2-release.zip` at the root of the Switch 2 microSD
+   card. `warthog.nro`, `brokers.txt`, `menus/`, `LICENSE` and
+   `THIRD-PARTY-NOTICES.txt` must be under `sdmc:/switch/warthog/`. Native
+   LP64 uses one `warthog.nro`; no guest ELF is needed.
+2. Put your own retail Xbox Halo: Combat Evolved `.iso` or `.xiso.iso` under
+   `sdmc:/switch/warthog/`. The first launch extracts it into `maps/` after a
+   free-space check and removes partial files after interruption. Alternatively
+   copy `ui.map`, `bitmaps.map`, `sounds.map`, campaign and multiplayer maps
+   into `sdmc:/switch/warthog/maps/`. Compatible
+   `sdmc:/switch/ChupaThingyCE/maps/` data is detected and reused. Optional
+   Custom Edition maps go in `maps_ce/`; put `cacert.pem` at the application
+   root for HTTPS server lists and map downloads.
+3. Launch **Warthog for Switch 2** from hbmenu in full-memory title takeover
+   mode (`Application` or `SystemApplication`), rather than album applet mode.
+4. Upgrade by unpacking a newer archive, or use the in-app updater confined to
+   `thedavidweng/warthog-switch2` Switch 2 `build-<N>` releases. It updates
+   `warthog.nro`, `menus/`, `brokers.txt` and notices while preserving `maps/`,
+   `maps_ce/`, `save/`, `config.toml` and `logs/`.
 
-```
-sdmc:/switch/warthog/
-    warthog.nro
-    warthog_guest.elf        # present when the ILP32 guest model is selected
-    config.toml
-    brokers.txt
-    menus/
-    maps/
-    maps_ce/
-    save/
-    logs/
-```
+Everything stays inside `sdmc:/switch/warthog/`. Nothing is written to NAND,
+no privileged background plugin is installed, and no permanent system
+modification is required.
 
-Everything stays inside that folder. Uninstalling means deleting it. Nothing
-is written to NAND, no privileged background plugin is installed, and no
-permanent system modification is required.
-
-`maps/` holds the retail maps unpacked from your disc, `maps_ce/` holds Halo
-PC Custom Edition maps, `save/` holds saves and profiles, and `logs/` holds
-the logs to attach to a bug report. Existing extracted game data from
-`sd:/switch/ChupaThingyCE/` is reused where it is compatible rather than
-converted; the details land with the data-workflow work.
 
 ## Building it yourself
 
@@ -143,16 +133,14 @@ pinned toolchain and the artifact audit.
 ### Deploying to a development console
 
 ```sh
-python3 tools/switch_deploy.py --host <switch2-ip> --port <port> \
-    --destination /switch/warthog build/switch2/warthog.nro
-python3 tools/switch_logs.py
+python3 tools/switch_deploy.py --target switch2 --build
+python3 tools/switch_logs.py --target switch2 --elf build/switch2/warthog.elf
 ```
 
-The console runs an FTP server (kaiHEN's `ftpd`, or `sw2transfer`). Until the
-Switch 2 development loop lands, the deploy tool still defaults to the
-original Switch's paths, so the destination is passed explicitly. The address
-is passed in, or set in `WARTHOG_SWITCH2_HOST` and `WARTHOG_SWITCH2_PORT`; it
-is never committed.
+The console runs an FTP server (kaiHEN's `ftpd`). Set
+`WARTHOG_SWITCH2_HOST` and optionally `WARTHOG_SWITCH2_PORT` before deploying;
+the address is never committed. Crash logs must be matched with the same
+unstripped ELF.
 
 ## How it is built
 
@@ -165,11 +153,13 @@ platform adapter.
 
 The game engine stays an explicitly pinned upstream submodule, the host and
 guest boundary keeps Warthog's existing SDL2/SDL3 split, and fixes the console
-needs live in `port/switch/overrides/` until upstream takes them. Both
-candidate ABI models — Warthog's ILP32 guest inside an LP64 host, and building
-the game natively as LP64 — are still under evaluation, and the measured
-decision will be recorded in `docs/adr/`. [AGENTS.md](AGENTS.md) states the
-boundaries and the constraints in full.
+needs live in `port/switch/overrides/` until upstream takes them. ADR-0001
+selects native LP64 and records the `[0x40000000, 0xa0000000)` `StackRegion`
+and checkpoint relocation constraints. ADRs 0002–0004 document Drako3D/UAM2,
+renderer parity and the SDL seam. The full build, deployment and verification
+workflow is in [docs/architecture.md](docs/architecture.md) and
+[docs/release-checklist.md](docs/release-checklist.md). [AGENTS.md](AGENTS.md)
+states the boundaries and the constraints in full.
 
 ## License
 
