@@ -45,6 +45,9 @@ give.
 #ifdef __SWITCH2__
 #include "../../switch2/host/nx2_platform.h"
 #include "../../switch2/host/switch2_lifecycle.h"
+#ifdef __SWITCH2__
+#include "../../switch2/host/switch2_splitscreen.h"
+#endif
 #endif
 #include <pthread.h>
 #include <stdarg.h>
@@ -1860,6 +1863,9 @@ static void present(const struct dk_command_present *command)
 	struct target *back_buffer = target_get(&command->back_buffer);
 	struct target *screenshot = NULL;
 	struct trace_event *event = trace_add(DK_COMMAND_PRESENT);
+#ifdef __SWITCH2__
+	uint64_t frame_started_ns = slow_now_ns();
+#endif
 	int slot;
 
 	event->a[0] = command->back_buffer.data;
@@ -1912,18 +1918,44 @@ static void present(const struct dk_command_present *command)
 		/* letterboxed to the back buffer's shape */
 		uint32_t source_width = SURFACE_PIXEL_WIDTH(&back_buffer->surface);
 		uint32_t source_height = SURFACE_PIXEL_HEIGHT(&back_buffer->surface);
+#ifdef __SWITCH2__
+		struct switch2_present_route route;
+		uint32_t width, height;
+#else
 		uint32_t width = dk.screen_width, height = dk.screen_width * source_height / source_width;
+#endif
 		DkImageView source;
 		DkImageRect from = { 0, 0, 0, source_width, source_height, 1 };
 		DkImageRect to;
 
+#ifdef __SWITCH2__
+		switch2_splitscreen_get_present_route(&route, dk.screen_width, dk.screen_height);
+		route.destination = switch2_splitscreen_clamp(route.destination,
+			dk.screen_width, dk.screen_height);
+		width = route.destination.width;
+		height = route.destination.width * source_height / source_width;
+#endif
 		if (height > dk.screen_height)
 		{
+#ifdef __SWITCH2__
+			height = route.destination.height;
+			width = route.destination.height * source_width / source_height;
+#else
 			height = dk.screen_height;
 			width = dk.screen_height * source_width / source_height;
+#endif
 		}
+#ifdef __SWITCH2__
+		if (width > route.destination.width)
+			width = route.destination.width;
+		if (height > route.destination.height)
+			height = route.destination.height;
+		to.x = route.destination.x + (route.destination.width - width) / 2;
+		to.y = route.destination.y + (route.destination.height - height) / 2;
+#else
 		to.x = (dk.screen_width - width) / 2;
 		to.y = (dk.screen_height - height) / 2;
+#endif
 		to.z = 0;
 		to.width = width;
 		to.height = height;
@@ -1941,6 +1973,10 @@ static void present(const struct dk_command_present *command)
 		dkCmdBufBlitImage(dk.commands, &source, &from, &screen_view, &to, DkBlitFlag_FilterLinear, 0);
 	}
 	command_done(event);
+#ifdef __SWITCH2__
+	switch2_splitscreen_record_frame(switch2_splitscreen_active_viewports(),
+		slow_now_ns() - frame_started_ns);
+#endif
 	profile_frame_end();
 	commands_submit();
 	if (capture.recording && dk.frame == capture.slot)
@@ -1993,6 +2029,18 @@ static void present(const struct dk_command_present *command)
 			host_logf(HOST_LOG_INFO, "deko3d: GPU busy %.2f ms a frame on average, %.2f ms the longest (%u frames)",
 				(double)dk.gpu_busy_total_ns / dk.gpu_frames / 1e6, (double)dk.gpu_busy_peak_ns / 1e6,
 				(unsigned)dk.gpu_frames);
+#ifdef __SWITCH2__
+		{
+			struct switch2_splitscreen_stats split_stats;
+			switch2_splitscreen_get_stats(&split_stats);
+			if (split_stats.frames)
+				host_logf(HOST_LOG_INFO, "split-screen: %u viewports, %.2f ms a frame on average, %.2f ms the longest (%llu frames)",
+					(unsigned)split_stats.active_viewports,
+					(double)split_stats.total_ns / split_stats.frames / 1e6,
+					(double)split_stats.maximum_ns / 1e6,
+					(unsigned long long)split_stats.frames);
+		}
+#endif
 		dk.gpu_busy_total_ns = dk.gpu_busy_peak_ns = 0;
 		dk.gpu_frames = 0;
 		dk.command_peak_bytes = 0;
