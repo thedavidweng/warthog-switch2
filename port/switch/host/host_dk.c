@@ -277,9 +277,15 @@ static struct
 	uint32_t readback_width, readback_height, readback_pitch;
 } dk;
 
+#ifdef __SWITCH2__
+void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message);
+#endif
 static void debug_callback(void *user, const char *context, DkResult result, const char *message)
 {
 	(void)user;
+#ifdef __SWITCH2__
+	warthog_dk_debug_callback(user, context, result, message);
+#endif
 	host_logf(HOST_LOG_ERROR, "deko3d: %s: result %d: %s", context ? context : "?", (int)result,
 		message ? message : "");
 }
@@ -816,6 +822,9 @@ static int queue_faulted(void)
 	if (!dk.queue || !dkQueueIsInErrorState(dk.queue))
 		return 0;
 	dk.faulted = 1;
+#ifdef __SWITCH2__
+	warthog_dk_debug_callback(NULL, "queue_faulted", 0, "GPU queue is in an error state");
+#endif
 	trace.dump_pending = 1;
 	host_logf(HOST_LOG_ERROR, "deko3d: the GPU faulted (the queue is in an error state) by submission %u, frame %lu; "
 		"nothing more is drawn or presented", (unsigned)dk.serial, dk.frames_presented);
@@ -1626,6 +1635,7 @@ static int initialize(void)
 	host_logf(HOST_LOG_INFO, "deko3d: device ready, presenting at %ux%u", (unsigned)dk.screen_width,
 		(unsigned)dk.screen_height);
 
+#ifndef __SWITCH2__
 	/* the window's committed chunks, GPU-mapped (host_memory.c reports the
 	chunks; the GPU checks go as the probe's did) */
 	nvMapInit();
@@ -1633,6 +1643,7 @@ static int initialize(void)
 		dk.nv_ready = 1;
 	else
 		host_logf(HOST_LOG_ERROR, "deko3d: no test address space for the window's chunks");
+#endif
 	dk.ready = 1;
 	chunks_map();
 
@@ -2274,10 +2285,6 @@ static int slot_take(uint32_t *slot)
 	if (tex.slots_free_count)
 	{
 		*slot = tex.slots_free[--tex.slots_free_count];
-#ifdef __SWITCH2__
-		/* Ampere does not invalidate a reused descriptor automatically. */
-		dkCmdBufBarrier(dk.commands, DkBarrier_None, DkInvalidateFlags_Descriptors);
-#endif
 		return 1;
 	}
 	if (tex.slot_next == IMAGE_SLOTS)
@@ -2505,6 +2512,10 @@ static int texture_make(struct texture *texture, const struct dk_command_texture
 			view.swizzle[channel] = (DkImageSwizzle)(DkImageSwizzle_Red + ((command->swizzle >> (8 * channel)) & 3));
 	}
 	dkImageDescriptorInitialize(&descriptors[texture->slot], &view, false, false);
+#ifdef __SWITCH2__
+	/* Ampere retains descriptors after the CPU rewrites them. */
+	barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+#endif
 	texture->swizzle = command->swizzle;
 	texture->kind = command->kind;
 	texture->format = command->format;
@@ -3094,6 +3105,10 @@ static uint32_t sampler_slot(const struct dk_sampler *sampler)
 	index = tex.sampler_count++;
 	tex.samplers[index] = *sampler;
 	dkSamplerDescriptorInitialize(&descriptors[index], &made);
+#ifdef __SWITCH2__
+	/* Ampere retains descriptors after the CPU rewrites them. */
+	barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+#endif
 	return index;
 }
 
@@ -4771,7 +4786,9 @@ void host_dk_shutdown(void)
 		if (blocks[i]) dkMemBlockDestroy(blocks[i]);
 	if (dk.nv_ready) nvAddressSpaceClose(&dk.test_address_space);
 	dkDeviceDestroy(dk.device);
+#ifndef __SWITCH2__
 	if (dk.ready) nvMapExit();
+#endif
 	free(trace.events);
 	for (i = 0; i < PICTURE_SLOTS; i++) free(picture.slots[i].data);
 	for (i = 0; i < RENDER_QUEUE; i++) free(render_queue.streams[i].data);

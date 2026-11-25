@@ -4,6 +4,30 @@
 #include <math.h>
 #include <stdint.h>
 
+static inline int warthog_verify_simulation_ticks(void)
+{
+	const float dt = 1.0f / TICKS_PER_SECOND;
+	const int rates[] = {30, 60, 120};
+	if (TICKS_PER_SECOND != 30 || dt != 1.0f / 30.0f)
+		return 0;
+	for (int i = 0; i < 3; ++i)
+	{
+		int accumulator = 0, ticks = 0;
+		for (int frame = 0; frame < rates[i]; ++frame)
+		{
+			accumulator += TICKS_PER_SECOND;
+			while (accumulator >= rates[i])
+			{
+				accumulator -= rates[i];
+				++ticks;
+			}
+		}
+		if (ticks != 30 || accumulator != 0)
+			return 0;
+	}
+	return 1;
+}
+
 /* Include after the rewritten engine's cseries.h and math/real_math.h. */
 static inline int warthog_verify_deterministic_math(void)
 {
