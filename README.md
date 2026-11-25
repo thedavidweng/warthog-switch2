@@ -48,7 +48,7 @@ evidence behind it.
 | Gameplay, campaign, multiplayer on Switch 2 | Not yet supported |
 | Switch 2 display modes (1080p120 handheld, 4K60 / 1440p120 docked, VRR) | Not yet supported |
 | Joy-Con 2 `Nmouse` aiming | Not yet supported |
-| GameShare local multiplayer | Not yet supported |
+| GameShare local multiplayer | Implemented; console matchmaking and guest streaming pending Tested on hardware |
 
 Nothing here has been run on Switch 2 hardware yet. The upstream Switch port is
 carried in this repository untouched, which is not the same as this fork having
@@ -205,8 +205,8 @@ licences are honoured and notices kept beside any code copied in.
 - **dolphin-nx** — GPL-2.0-or-later as a whole; the imported `nx2_platform`
   subset is MIT, from `NaGaa95/dolphin-nx` at
   `7fb685b353e19a9a5848e9bd658945d1f9cd382a`. Its original SPDX headers and
-  source attribution are preserved. The upstream `nx2_gameshare` helper is
-  also MIT.
+  source attribution are preserved. The upstream `nx2_gameshare` helper
+  is also MIT, from the same revision.
 - **nanosvg** — Zlib, in `port/switch/third_party`, drawn from upstream's port.
 
 ### No console SDK, no game assets

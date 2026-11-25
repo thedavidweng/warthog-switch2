@@ -39,6 +39,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 #include "nx2_platform.h"
 #include "switch2_lifecycle.h"
 #include "switch2_update.h"
+#include "switch2_gameshare.h"
 
 extern int halo_main(void);
 void host_dk_shutdown(void);
@@ -330,12 +331,13 @@ int main(int argc, char **argv)
 	}
 	log_shader_runtime();
 	const char *trigger = "sdmc:/switch/warthog/trigger_fault.txt";
-	bool cpu_test = false, gpu_test = false, headless_check = false;
+	bool cpu_test = false, gpu_test = false, headless_check = false, gameshare = false;
 	for (int i = 1; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--self-test-cpu-fault")) cpu_test = true;
 		if (!strcmp(argv[i], "--self-test-gpu-fault")) gpu_test = true;
 		if (!strcmp(argv[i], "--headless-check")) headless_check = true;
+		if (!strcmp(argv[i], "--gameshare")) gameshare = true;
 	}
 	if (access(trigger, F_OK) == 0)
 	{
@@ -370,6 +372,10 @@ int main(int argc, char **argv)
 				switch2PlatformDisplayInit();
 				switch2_lifecycle_start();
 				atexit(switch2_lifecycle_cleanup);
+				if (gameshare) {
+					char gameshare_error[256];
+					switch2_gameshare_begin(gameshare_error, sizeof(gameshare_error));
+				}
 				halo_main();
 				switch2_lifecycle_cleanup();
 				platform_xbox_memory_reset_for_shutdown();
