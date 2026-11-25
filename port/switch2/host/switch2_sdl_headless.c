@@ -20,6 +20,7 @@ runtime's and a search is FindFirstFile's.
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include "switch2_campaign.h"
 
 #ifdef _WIN32
 #include <direct.h>
@@ -141,16 +142,12 @@ void *SDL_LoadFile(const char *path, size_t *size)
 
 bool SDL_SaveFile(const char *path, const void *data, size_t size)
 {
-	FILE *file = fopen(path, "wb");
-	bool written;
-
-	if (!file)
+	if (!switch2_campaign_write_atomic(path, data, size))
 	{
 		headless_set_error(strerror(errno));
 		return false;
 	}
-	written = fwrite(data, 1, size, file) == size;
-	return fclose(file) == 0 && written;
+	return true;
 }
 
 /* a file written as a stream (port_config.c's config.toml: to a new file,

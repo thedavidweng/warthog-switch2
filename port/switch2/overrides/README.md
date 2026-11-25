@@ -51,3 +51,11 @@ upstream for console builds.
 
 Emits weak definitions of header inline functions for Switch 2's GCC build.
 This can be proposed upstream with the Switch 2 port.
+
+## source/saved games/game_state_xbox.c
+
+Writes persistent checkpoints atomically through a synced `.part` file and removes interrupted writes before loading.
+
+## source/saved games/game_state.c
+
+Relocates LP64 native pointers in saved memory pools and LRUV caches before validating a checkpoint image.

@@ -22,6 +22,29 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void *slice;
 #ifdef __SWITCH2__
 static VirtmemReservation *reservation;
+
+static void *switch2_fixed_window(void)
+{
+    u64 stack, size, address, end;
+    MemoryInfo info;
+    u32 page;
+
+    if (R_FAILED(svcGetInfo(&stack, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0)) ||
+        R_FAILED(svcGetInfo(&size, InfoType_StackRegionSize, CUR_PROCESS_HANDLE, 0)))
+        return NULL;
+    address = stack + 0x08000000ULL;
+    end = address + SWITCH2_XBOX_WINDOW_SIZE;
+    if (end < address || end > stack + size)
+        return NULL;
+    for (u64 cursor = address; cursor < end; cursor = info.addr + info.size)
+    {
+        if (R_FAILED(svcQueryMemory(&info, &page, cursor)) ||
+            info.type != MemType_Unmapped || info.addr > cursor ||
+            info.addr + info.size < cursor || info.addr + info.size < end)
+            return NULL;
+    }
+    return (void *)(uintptr_t)address;
+}
 #endif
 static struct mapped_run *runs, *anon;
 static size_t run_count, run_capacity, anon_count, anon_capacity, committed;
@@ -90,7 +113,9 @@ bool switch2_mman_init(void)
     if (!slice) {
 #ifdef __SWITCH2__
         virtmemLock();
-        void *p = virtmemFindStack(SWITCH2_XBOX_WINDOW_SIZE, 0x10000);
+        void *p = switch2_fixed_window();
+        if (!p)
+            p = virtmemFindStack(SWITCH2_XBOX_WINDOW_SIZE, 0x10000);
         reservation = p ? virtmemAddReservation(p, SWITCH2_XBOX_WINDOW_SIZE) : NULL;
         virtmemUnlock();
         if (reservation) slice = p;
