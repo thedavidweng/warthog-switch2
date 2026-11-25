@@ -155,9 +155,22 @@ const char *switch2_campaign_mission_id(size_t index)
 	return index < sizeof(missions) / sizeof(missions[0]) ? missions[index] : NULL;
 }
 
+static int valid_zlib_stream(FILE *file)
+{
+	unsigned char z[2];
+	unsigned cmf, flg;
+
+	if (fread(z, 1, sizeof(z), file) != sizeof(z))
+		return 0;
+	cmf = z[0];
+	flg = z[1];
+	return (cmf & 0x0f) == 8 && (cmf >> 4) <= 7 && (((cmf << 8) | flg) % 31) == 0;
+}
+
 int switch2_campaign_validate_map(const char *path, char *message, size_t size)
 {
 	unsigned char header[2048];
+	uint32_t version, file_length;
 	struct stat st;
 	const char *problem = NULL;
 	FILE *file = fopen(path, "rb");
@@ -172,11 +185,21 @@ int switch2_campaign_validate_map(const char *path, char *message, size_t size)
 		problem = "bad header";
 	else if (memcmp(header + 2044, "toof", 4))
 		problem = "bad footer";
-	else if (read_u32(header + 4) != 5 && read_u32(header + 4) != 7 &&
-		read_u32(header + 4) != 609)
-		problem = "unsupported version";
-	else if (read_u32(header + 8) < sizeof(header) || read_u32(header + 8) > (uint64_t)st.st_size)
-		problem = "truncated";
+	else
+	{
+		version = read_u32(header + 4);
+		file_length = read_u32(header + 8);
+		if (version != 5 && version != 7 && version != 609)
+			problem = "unsupported version";
+		else if (file_length < sizeof(header) || file_length > 0x11600000u)
+			problem = "truncated";
+		else if (file_length > (uint64_t)st.st_size)
+		{
+			/* Retail Xbox (version 5) maps store a zlib stream after the 2048-byte header. */
+			if (version != 5 || (uint64_t)st.st_size < sizeof(header) + 6 || !valid_zlib_stream(file))
+				problem = "truncated";
+		}
+	}
 	fclose(file);
 	if (problem)
 	{

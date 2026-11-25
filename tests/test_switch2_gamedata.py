@@ -79,6 +79,10 @@ class GameDataTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertIn(b"maps", message.value)
             self.assertIn(b"disc image", message.value)
+            status_null_legacy = self.lib.switch2_gamedata_prepare(
+                bytes(root), None, 0, None, None, message, len(message),
+            )
+            self.assertEqual(status_null_legacy, 1)
 
     def test_legacy_data_is_merged_without_overwriting(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -123,10 +123,16 @@ int main(void) {
             (header[:-4] + b"xxxx", "footer"),
             (header[:4] + struct.pack("<I", 999) + header[8:], "version"),
             (header[:8] + struct.pack("<I", 4096) + header[12:], "truncated"),
+            (header[:8] + struct.pack("<I", 4096) + header[12:] + b"\x00" * 16, "truncated"),
+            (header[:4] + struct.pack("<II", 7, 4096) + header[12:] + b"\x78\x9c\x03\x00\x00\x00\x00\x01", "truncated"),
         ]:
             path.write_bytes(content)
             self.assertFalse(validate())
             self.assertIn(expected, message.value.decode())
+        import zlib
+        compressed = header[:8] + struct.pack("<I", 4096) + header[12:] + zlib.compress(b"\x00" * 2048)
+        path.write_bytes(compressed)
+        self.assertTrue(validate(), message.value.decode())
 
     def test_resource_cache_header(self):
         path = pathlib.Path(self.directory.name) / "bitmaps.map"

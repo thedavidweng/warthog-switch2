@@ -22,8 +22,11 @@ static int path_join(char *out, size_t size, const char *base, const char *name)
 
 static int find_name(const char *folder, const char *name, char *out, size_t size)
 {
-	DIR *dir = opendir(folder);
+	DIR *dir;
 	struct dirent *entry;
+	if (!folder || !*folder || !name || !*name)
+		return 0;
+	dir = opendir(folder);
 	if (!dir)
 		return 0;
 	while ((entry = readdir(dir)))
