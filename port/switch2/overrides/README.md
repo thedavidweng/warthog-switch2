@@ -15,3 +15,23 @@ adapter.
 Reserves the Switch 2 address window and commits contiguous and Custom Edition
 tag-cache pages on demand. This platform-specific change can be proposed
 upstream with the Switch 2 memory adapter.
+
+## port/linux/include/halo_linux_prefix.h
+
+Adapts the LP64 prefix to Newlib and the Switch 2 address window. This
+platform-specific change can be proposed upstream with the Switch 2 port.
+
+## source/interface/terminal.c
+
+Uses the native variadic argument type for Switch 2 status lines. This ABI
+fix can be proposed upstream with the Switch 2 port.
+
+## port/linux/game/network_distributed.c
+
+Avoids calling the chat notice when chat is disabled. This can be proposed
+upstream for console builds.
+
+## port/linux/game/msvc_comdat.c
+
+Emits weak definitions of header inline functions for Switch 2's GCC build.
+This can be proposed upstream with the Switch 2 port.
