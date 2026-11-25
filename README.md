@@ -42,7 +42,7 @@ evidence behind it.
 
 | Area | Status |
 |---|---|
-| Upstream Switch port (`ninja switch`) | Verified against upstream — unchanged, still builds |
+| Upstream Switch port (`ninja switch`) | Implemented — upstream's code, untouched by this repository |
 | Switch 2 toolchain, `ninja switch2`, packaging | Not yet supported — in progress |
 | Drako3D renderer and Ampere shader compilation | Not yet supported — in progress |
 | Gameplay, campaign, multiplayer on Switch 2 | Not yet supported |
@@ -50,9 +50,10 @@ evidence behind it.
 | Joy-Con 2 `Nmouse` aiming | Not yet supported |
 | GameShare local multiplayer | Not yet supported |
 
-The only capability in this repository that has been exercised is the upstream
-Switch port itself, which is unchanged and still builds. The Switch 2 build
-graph, renderer and platform work are being added under the tickets of
+Nothing here has been run on Switch 2 hardware yet. The upstream Switch port is
+carried in this repository untouched, which is not the same as this fork having
+rebuilt it. The Switch 2 build graph, renderer and platform work are being
+added under the tickets of
 [issue #1](https://github.com/thedavidweng/warthog-switch2/issues/1), and each
 row above moves up a level only when the evidence behind it exists.
 
