@@ -140,3 +140,37 @@ jobs:
           path: package/switch/ChupaThingyCE
           if-no-files-found: error
           retention-days: 7
+
+  # The Switch 2 build, in the toolchain scripts/switch2/Dockerfile pins. The
+  # image is built here rather than pulled, because it is not published: every
+  # pin it uses is UPSTREAM.json's, and tests/test_switch2_build.py fails when
+  # the two disagree. The audit is the gate: it reads the artifacts and refuses
+  # an original-Switch program wearing the Switch 2's name.
+  switch2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: true
+
+      - name: Build the toolchain image
+        run: scripts/switch2/build.sh image
+
+      - name: Configure
+        run: scripts/switch2/build.sh configure
+
+      - name: Build
+        run: scripts/switch2/build.sh build
+
+      - name: Audit the artifacts
+        run: scripts/switch2/build.sh audit
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: warthog-switch2-${{ github.sha }}
+          path: |
+            build/switch2/warthog.nro
+            build/switch2/warthog.elf
+          if-no-files-found: error
+          retention-days: 7

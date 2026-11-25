@@ -42,7 +42,7 @@ Three layers, and a change belongs to exactly one of them:
 |---|---|---|
 | Shared engine | `chupathingyce/` submodule | Upstream's. Never edited in place; the pin moves instead. |
 | Shared console code | `port/switch/` (guest + host) | Warthog's Deko3D renderer and console adaptations. Shared by both consoles; changes here must keep `ninja switch` working. |
-| Switch 2 platform | `port/switch2/` | The Switch 2 build graph and platform adapters: window, display modes, clocks, `Nmouse`, GameShare, lifecycle. Not created yet; it is where ticket #3 onward puts this layer, and nothing outside `port/switch2/` may assume it exists. |
+| Switch 2 platform | `port/switch2/` | The Switch 2 build graph and platform adapters: window, display modes, clocks, `Nmouse`, GameShare, lifecycle. Created by ticket #3, and nothing outside `port/switch2/` may assume the rest of it exists. |
 
 The engine stays the authoritative game. Platform-specific code does not leak
 into shared gameplay code, and generally useful fixes are separable into
@@ -200,14 +200,14 @@ ninja switch
 python3 -m unittest discover -s tests
 
 # The port's Python compiles
-python3 -m py_compile port/switch/build.py tools/*.py
+python3 -m py_compile port/switch/build.py port/switch2/build.py tools/*.py
 
 # Overrides are still needed and still listed
 python3 tools/switch_overrides.py
 
-# The Switch 2 build, once port/switch2/build.py and `ninja switch2` exist
+# The Switch 2 build, in its pinned toolchain (scripts/switch2/build.sh)
 python3 chupathingyce/configure.py --console-port port/switch2
-ninja switch2                       # build/switch2/warthog.nro and warthog_guest.elf
+ninja switch2                       # build/switch2/warthog.nro and warthog.elf
 ```
 
 `ninja switch2` is the target the Switch 2 build graph provides. Its output

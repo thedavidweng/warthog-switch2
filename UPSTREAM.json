@@ -28,8 +28,8 @@
     },
     "libounce": {
       "repository": "https://github.com/ouncebrew/libounce",
-      "commit": "75e79e28a9d103c9c65e74d1bb1653a37b67b9cd",
-      "release": "20261123",
+      "commit": "03af07a739a9a3b48704500cffcd6155692cc194",
+      "release": "20261125",
       "license": "ISC",
       "note": "The Switch 2 platform layer: switch2_rules, cmake/Switch2.cmake, libnx.a and -D__SWITCH2__. Its jitCreate checks envIsSyscallHinted(0x4B)/envIsSyscallHinted(0x4C) before falling back to libkaihen, which is what decides where executable guest memory can live."
     },
