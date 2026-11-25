@@ -36,6 +36,7 @@ same commands work outside it.
 import json
 import os
 import runpy
+import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -136,6 +137,8 @@ def build_header(sln: Any, record: dict) -> str:
         "WARTHOG_SWITCH2_CHUPATHINGYCE_COMMIT": record["submodules"]["chupathingyce"]["commit"],
         "WARTHOG_SWITCH2_DRAKO3D_COMMIT": record["dependencies"]["drako3d"]["commit"],
         "WARTHOG_SWITCH2_DRAKO3D_VERSION": record["dependencies"]["drako3d"]["release"],
+        "WARTHOG_SWITCH2_DRAKO3D_LIBRARY": "libdrako3d.a" if flavor == "release" else "libdrako3dd.a",
+        "WARTHOG_SWITCH2_TOOLCHAIN_COMMIT": record["dependencies"]["ounce-devkit"]["commit"],
         "WARTHOG_SWITCH2_UAM2_COMMIT": record["dependencies"]["uam2"]["commit"],
         "WARTHOG_SWITCH2_UAM2_VERSION": record["dependencies"]["uam2"]["release"],
         "WARTHOG_SWITCH2_LIBOUNCE_COMMIT": record["dependencies"]["libounce"]["commit"],
@@ -178,14 +181,16 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         n.comment(f"Switch 2 build: no libuam2rt.a under {portlibs_switch2} "
                   f"(UAM2's runtime, which scripts/switch2/Dockerfile builds)")
         return
-    if not (libounce / "lib" / "libdrako3d.a").is_file():
-        n.comment(f"Switch 2 build: no libdrako3d.a under {libounce} "
+    release = getattr(sln, "port_release", False)
+    renderer = "drako3d" if release else "drako3dd"
+    if not (libounce / "lib" / f"lib{renderer}.a").is_file():
+        n.comment(f"Switch 2 build: no lib{renderer}.a under {libounce} "
                   f"(Drako3D, which scripts/switch2/Dockerfile builds)")
         return
 
     record = upstream_record()
     version = nacp_version(record)
-    release = getattr(sln, "port_release", False)
+    libraries = [renderer, *SWITCH2_LIBRARIES[1:]]
 
     n.comment("Switch 2 build (ninja switch2); see port/switch2/README.md")
     n.variable("switch2_cc", str(compiler))
@@ -280,7 +285,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         # the C++ driver links even though the program is C: UAM2's runtime is
         # C++ (Mesa's NAK is), and its standard library comes with it
         command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out @$out.rsp {library_paths} "
-                 + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
+                 + " ".join(f"-l{library}" for library in libraries)
                  + " -lstdc++ -Wl,-Map,$out.map"),
         description="SWITCH2 LINK $out",
         rspfile="$out.rsp",
@@ -291,7 +296,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
         command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out "
                  f"{' '.join(str(obj) for obj in objects)} -Wl,--start-group "
                  f"{game_archive} {platform_archive} -Wl,--end-group {library_paths} "
-                 + " ".join(f"-l{library}" for library in SWITCH2_LIBRARIES)
+                 + " ".join(f"-l{library}" for library in libraries)
                  + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
                  " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
                  " -Wl,--wrap=hidInitializeTouchScreen -lstdc++ -Wl,-Map,$out.map"),
@@ -323,7 +328,18 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     )
     n.build(outputs=nro, rule="switch2_nro", inputs=[elf, nacp, ICON])
 
-    n.build(outputs="switch2", rule="phony", inputs=[nro, elf])
+    menus_dir = BUILD / "menus"
+    menus_stamp = menus_dir / ".written"
+    game = REPO_ROOT / "chupathingyce"
+    n.rule(name="switch2_menus",
+           command=f"{_quote(sys.executable)} {_quote(REPO_ROOT / 'tools/switch_menus.py')} "
+                   f"--out {_quote(menus_dir)} --stamp $out",
+           description="SWITCH2 MENUS $out")
+    n.build(outputs=menus_stamp, rule="switch2_menus",
+            implicit=[REPO_ROOT / "tools/switch_menus.py", game / "tools/port_settings.py",
+                      game / "port/assets/menus/chupathingy/main_menu.xml",
+                      game / "port/assets/menus/menus.json"])
+    n.build(outputs="switch2", rule="phony", inputs=[nro, elf, menus_stamp])
     probe_obj = BUILD / "probe" / "abi_probe.c.o"
     n.build(outputs=probe_obj, rule="switch2_cc", inputs=PORT_DIR / "probe" / "abi_probe.c",
             implicit=[header], variables={"cflags": f"{code_flags} {includes} -ftls-model=local-exec"})
