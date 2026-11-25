@@ -35,6 +35,9 @@ Android, each request goes to a thread that has one.
 #include <SDL2/SDL.h>
 #include "tomlc17.h"
 #include <switch.h>
+#ifdef __SWITCH2__
+#include "../../switch2/host/nx2_platform.h"
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,8 +179,10 @@ static char standin_window, standin_context;
 static void standin_window_size(int *width, int *height)
 {
 #ifdef __SWITCH2__
-	*height = (int)host_dk_output_height();
-	*width = *height * 16 / 9;
+	u32 w, h;
+	nx2DisplaySize(&w, &h);
+	*width = (int)w;
+	*height = (int)h;
 #else
 	int docked = appletGetOperationMode() == AppletOperationMode_Console;
 

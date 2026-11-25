@@ -42,6 +42,10 @@ give.
 
 #include <deko3d.h>
 #include <switch.h>
+#ifdef __SWITCH2__
+#include "../../switch2/host/nx2_platform.h"
+#include "../../switch2/host/switch2_lifecycle.h"
+#endif
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1549,6 +1553,7 @@ int host_dk_window_taken(void)
 /* the height host_dk_output_height last chose: 720 in handheld, 1080 docked */
 #ifdef __SWITCH2__
 static uint32_t output_height = SCREEN_FULL_HEIGHT;
+static uint32_t output_width = SCREEN_FULL_WIDTH;
 #else
 static uint32_t output_height = SCREEN_HEIGHT;
 #endif
@@ -1559,11 +1564,13 @@ handheld. present remakes the swapchain when it changes */
 unsigned int host_dk_output_height(void)
 {
 #ifdef __SWITCH2__
-	output_height = SCREEN_FULL_HEIGHT;
+	u32 height;
+	nx2DisplaySize(NULL, &height);
+	return height;
 #else
 	output_height = appletGetOperationMode() == AppletOperationMode_Console ? SCREEN_FULL_HEIGHT : SCREEN_HEIGHT;
-#endif
 	return output_height;
+#endif
 }
 
 /* the swapchain's images and the swapchain, at output_height */
@@ -1576,7 +1583,11 @@ static void swapchain_make(void)
 	int index;
 
 	dk.screen_height = output_height;
+#ifdef __SWITCH2__
+	dk.screen_width = output_width;
+#else
 	dk.screen_width = output_height == SCREEN_FULL_HEIGHT ? SCREEN_FULL_WIDTH : SCREEN_WIDTH;
+#endif
 	layout_make(&layout, DkImageFormat_RGBA8_Unorm,
 		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine
 #ifndef __SWITCH2__
@@ -1631,6 +1642,9 @@ static int initialize(void)
 	dk.commands = dkCmdBufCreate(&command_maker);
 	gpu_timing_initialize();
 
+#ifdef __SWITCH2__
+	nx2DisplaySize(&output_width, &output_height);
+#endif
 	swapchain_make();
 	host_logf(HOST_LOG_INFO, "deko3d: device ready, presenting at %ux%u", (unsigned)dk.screen_width,
 		(unsigned)dk.screen_height);
@@ -1866,7 +1880,12 @@ static void present(const struct dk_command_present *command)
 		dk.recorded = 0;
 		return;
 	}
+#ifdef __SWITCH2__
+	nx2DisplaySize(&output_width, &output_height);
+	if (switch2_lifecycle_size_changed(output_width, output_height, dk.screen_width, dk.screen_height))
+#else
 	if (output_height != dk.screen_height)
+#endif
 		swapchain_remake();
 	{
 		uint64_t waited = slow_now_ns();

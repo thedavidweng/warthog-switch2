@@ -63,8 +63,31 @@ static pthread_mutex_t event_lock = PTHREAD_MUTEX_INITIALIZER;
 static SDL_Event event_queue[32];
 static unsigned event_read, event_count;
 
+static AppletHookCookie lifecycle_cookie;
+static bool lifecycle_hooked, lifecycle_exit, lifecycle_quit_sent;
 
+static void lifecycle_hook(AppletHookType type, void *unused)
+{
+	(void)unused;
+	if (type == AppletHookType_OnExitRequest)
+		lifecycle_exit = true;
+}
 
+void switch2_lifecycle_start(void)
+{
+	if (!lifecycle_hooked) {
+		appletHook(&lifecycle_cookie, lifecycle_hook, NULL);
+		lifecycle_hooked = true;
+	}
+}
+
+void switch2_lifecycle_stop(void)
+{
+	if (lifecycle_hooked) {
+		appletUnhook(&lifecycle_cookie);
+		lifecycle_hooked = false;
+	}
+}
 
 bool SDL_Init(SDL_InitFlags flags)
 {
@@ -217,6 +240,28 @@ bool SDL_GL_SwapWindow(SDL_Window *window)
 bool SDL_PollEvent(SDL_Event *event)
 {
 	SDL_Event scratch;
+	if (!appletMainLoop() && !lifecycle_quit_sent)
+		lifecycle_exit = true;
+	if (lifecycle_exit && !lifecycle_quit_sent) {
+		SDL_Event quit = { .type = SDL_EVENT_QUIT };
+		if (SDL_PushEvent(&quit)) {
+			lifecycle_exit = false;
+			lifecycle_quit_sent = true;
+		}
+	}
+	if (nx2DisplayUpdate()) {
+		u32 width, height;
+		nx2DisplaySize(&width, &height);
+		(void)nx2DisplayReapply();
+		(void)nx2DisplayRefreshRate();
+		SDL_Event resized = { .type = SDL_EVENT_WINDOW_RESIZED };
+		resized.window.windowID = 1;
+		resized.window.data1 = width;
+		resized.window.data2 = height;
+		SDL_PushEvent(&resized);
+		resized.type = SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED;
+		SDL_PushEvent(&resized);
+	}
 	pthread_mutex_lock(&event_lock);
 	if (event_count)
 	{
@@ -378,10 +423,12 @@ const SDL_DisplayMode *SDL_GetDesktopDisplayMode(SDL_DisplayID id)
 {
 	static SDL_DisplayMode mode;
 	int rate = switch2PlatformRefreshRate();
+	u32 width, height;
+	nx2DisplaySize(&width, &height);
 	(void)id;
 	mode.displayID = 1;
 	mode.format = SDL_PIXELFORMAT_XRGB8888;
-	mode.w = 1920; mode.h = 1080;
+	mode.w = width; mode.h = height;
 	mode.pixel_density = 1.0f;
 	mode.refresh_rate = rate > 0 ? (float)rate : 60.0f;
 	return &mode;
