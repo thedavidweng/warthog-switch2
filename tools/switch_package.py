@@ -241,8 +241,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-SDL2
-Copyright (C) 1997-2026 Sam Lantinga
+Simple DirectMedia Layer (SDL2): Zlib license, Copyright (C) 1997-2026 SDL contributors
 
 This software is provided 'as-is', without any express or implied
 warranty.  In no event will the authors be held liable for any damages
