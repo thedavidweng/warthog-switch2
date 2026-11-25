@@ -28,7 +28,9 @@ int host_dk_compile_glsl(int fragment, const char *glsl, void **dksh, size_t *dk
 	*dksh = uam2rt_compile_glsl(glsl, fragment ? Uam2rtStage_Fragment : Uam2rtStage_Vertex,
 		dksh_size, &message);
 #if WARTHOG_DEV_PROFILING
-	switch2_perf_shader((double)armTicksToNs(armGetSystemTick() - start) / 1000000.0);
+	double elapsed = (double)armTicksToNs(armGetSystemTick() - start) / 1000000.0;
+	switch2_perf_shader(elapsed);
+	switch2_perf_renderer_shader_compile(elapsed);
 #endif
 	if (message && *message)
 		host_logf(*dksh ? HOST_LOG_INFO : HOST_LOG_ERROR, "uam2: %s", message);

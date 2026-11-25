@@ -54,12 +54,19 @@ command stream) is an index into the table of loaded shaders, plus one.
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __SWITCH2__
+#include "../../../port/switch2/host/switch2_shader_cache.h"
+#include "../../../port/switch2/host/switch2_perf.h"
+#endif
 
 /* the compiler whose DKSH files these are: the folder name, so a new UAM
    does not read an old compiler's files (port/switch/build.py defines it;
    a hand build says "unknown" and shares whatever folder that makes) */
 #ifndef HOST_DK_UAM_COMMIT
 #define HOST_DK_UAM_COMMIT "unknown"
+#endif
+#ifndef HOST_DK_SHADER_COMPILE_FLAGS
+#define HOST_DK_SHADER_COMPILE_FLAGS 0u
 #endif
 
 /* (32768 shaders of the 0.85 KB they average, with room: a card that has met many maps had more than the 4096 the
@@ -276,6 +283,13 @@ static struct
 	guest's "moving" message) */
 	uint32_t loose_loads;
 } dksh;
+
+#ifdef __SWITCH2__
+/* The existing queue and pack remain authoritative. This identity is logged
+   and used by the Switch 2 cache writer so a generator or ABI change cannot
+   reuse an Ampere entry made by another build. */
+static struct switch2_shader_cache_key switch2_cache_key;
+#endif
 
 /* ---------- paths */
 
@@ -1281,6 +1295,12 @@ static void service_start(void)
 	if (dksh.started)
 		return;
 	dksh.started = 1;
+#ifdef __SWITCH2__
+	switch2_shader_cache_key_init(&switch2_cache_key, 6, 2, HOST_DK_SHADER_COMPILE_FLAGS);
+	host_logf(HOST_LOG_INFO, "dk shader: Ampere cache key %016llx (DEKO3D=%u UAM2=%s)",
+		(unsigned long long)switch2_cache_key.digest, switch2_cache_key.deko3d,
+		switch2_cache_key.uam2);
+#endif
 	pthread_mutex_init(&dksh.lock, NULL);
 	pthread_cond_init(&dksh.queue_condition, NULL);
 	pthread_cond_init(&dksh.load_condition, NULL);
@@ -1473,6 +1493,10 @@ static uint32_t shader_load(uint64_t hash, uint32_t stage)
 			pthread_mutex_unlock(&dksh.lock);
 		}
 	}
+#ifdef __SWITCH2__
+	if (from_memory)
+		switch2_perf_renderer_shader_hit(1);
+#endif
 	if (contents && size < (long)sizeof(header))
 	{
 		free(contents);
@@ -1480,6 +1504,9 @@ static uint32_t shader_load(uint64_t hash, uint32_t stage)
 	}
 	if (!contents)
 	{
+#ifdef __SWITCH2__
+		switch2_perf_renderer_shader_miss();
+#endif
 		/* listed, but gone or unreadable: compiled again rather than read
 		again */
 		pthread_mutex_lock(&dksh.lock);

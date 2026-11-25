@@ -48,6 +48,30 @@ void switch2_perf_add_shader(struct switch2_perf_stats *stats, double ms)
 		stats->shader_max_ms = ms;
 }
 
+void switch2_perf_shader_cache_hit(struct switch2_perf_stats *stats, int warm)
+{
+	if (warm)
+		stats->shader_cache_hits++;
+}
+
+void switch2_perf_shader_cache_miss(struct switch2_perf_stats *stats)
+{
+	stats->shader_cache_misses++;
+}
+
+void switch2_perf_shader_compile(struct switch2_perf_stats *stats, double ms)
+{
+	stats->shader_runtime_compiles++;
+	stats->shader_compile_total_ms += ms;
+	if (ms > stats->shader_compile_max_ms)
+		stats->shader_compile_max_ms = ms;
+}
+
+void switch2_perf_shader_map_wait(struct switch2_perf_stats *stats, double ms)
+{
+	stats->shader_map_wait_ms += ms;
+}
+
 void switch2_perf_add_memory(struct switch2_perf_stats *stats, uint64_t bytes)
 {
 	if (bytes > stats->memory_peak)
@@ -83,6 +107,26 @@ void switch2_perf_renderer_rollover(void)
 void switch2_perf_renderer_fence_wait(uint64_t wait_us)
 {
 	switch2_perf_add_fence_wait(&renderer_stats, wait_us);
+}
+
+void switch2_perf_renderer_shader_hit(int warm)
+{
+	switch2_perf_shader_cache_hit(&renderer_stats, warm);
+}
+
+void switch2_perf_renderer_shader_miss(void)
+{
+	switch2_perf_shader_cache_miss(&renderer_stats);
+}
+
+void switch2_perf_renderer_shader_compile(double ms)
+{
+	switch2_perf_shader_compile(&renderer_stats, ms);
+}
+
+void switch2_perf_renderer_shader_map_wait(double ms)
+{
+	switch2_perf_shader_map_wait(&renderer_stats, ms);
 }
 
 void switch2_perf_record_frame(struct switch2_perf_stats *stats, double cpu_ms, double gpu_ms,
@@ -168,7 +212,8 @@ void switch2_perf_flush(struct switch2_perf_stats *stats, const char *scene, con
 		"\"gpu_ms\":{\"mean\":%.3f},\"submit_wait_us\":%llu,\"acquire_max_us\":%llu,"
 		"\"fence_max_us\":%llu,\"renderer_sync\":{\"upload_bytes\":%llu,\"upload_rollovers\":%llu,"
 		"\"fence_waits\":%llu,\"fence_wait_us\":%llu},\"shader\":{\"count\":%llu,\"total_ms\":%.3f,\"mean_ms\":%.3f,"
-		"\"max_ms\":%.3f},\"map_load_ms\":%.3f,\"memory_peak_bytes\":%llu,"
+		"\"max_ms\":%.3f,\"cache_hits\":%llu,\"cache_misses\":%llu,\"runtime_compiles\":%llu,"
+		"\"compile_total_ms\":%.3f,\"compile_max_ms\":%.3f,\"map_wait_ms\":%.3f},\"map_load_ms\":%.3f,\"memory_peak_bytes\":%llu,"
 		"\"heap_total_bytes\":%llu,\"heap_free_bytes\":%llu}]}",
 		scene, mode, switch2PlatformRefreshRate(), summary.mean, summary.p50, summary.p95,
 		summary.p99, summary.max, stats->frame_count ? stats->gpu_total_ms / stats->frame_count : 0.0,
@@ -179,7 +224,11 @@ void switch2_perf_flush(struct switch2_perf_stats *stats, const char *scene, con
 		(unsigned long long)(stats->fence_wait_us + renderer_stats.fence_wait_us),
 		(unsigned long long)stats->shader_count,
 		stats->shader_total_ms, stats->shader_count ? stats->shader_total_ms / stats->shader_count : 0.0,
-		stats->shader_max_ms, map_load_ms, (unsigned long long)stats->memory_peak,
+		stats->shader_max_ms, (unsigned long long)stats->shader_cache_hits,
+		(unsigned long long)stats->shader_cache_misses,
+		(unsigned long long)stats->shader_runtime_compiles,
+		stats->shader_compile_total_ms, stats->shader_compile_max_ms,
+		stats->shader_map_wait_ms, map_load_ms, (unsigned long long)stats->memory_peak,
 		(unsigned long long)stats->heap_total, (unsigned long long)stats->heap_free);
 	fclose(file);
 	warthog_log("INFO", "perf: %s %s %.3f ms p95 %.3f ms peak %llu bytes",
@@ -204,8 +253,11 @@ void switch2_perf_shader(double ms)
 void switch2_perf_log_shader(void)
 {
 	pthread_mutex_lock(&shader_lock);
-	host_logf(HOST_LOG_INFO, "UAM2 compiles: %llu, total %.3f ms, mean %.3f ms, max %.3f ms",
-		(unsigned long long)shader_stats.shader_count, shader_stats.shader_total_ms,
+	host_logf(HOST_LOG_INFO, "UAM2 compiles: %llu, cache hits %llu, misses %llu, total %.3f ms, mean %.3f ms, max %.3f ms",
+		(unsigned long long)shader_stats.shader_count,
+		(unsigned long long)shader_stats.shader_cache_hits,
+		(unsigned long long)shader_stats.shader_cache_misses,
+		shader_stats.shader_total_ms,
 		shader_stats.shader_count ? shader_stats.shader_total_ms / shader_stats.shader_count : 0.0,
 		shader_stats.shader_max_ms);
 	pthread_mutex_unlock(&shader_lock);
