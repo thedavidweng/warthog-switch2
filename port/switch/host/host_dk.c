@@ -45,9 +45,9 @@ give.
 #ifdef __SWITCH2__
 #include "../../switch2/host/nx2_platform.h"
 #include "../../switch2/host/switch2_lifecycle.h"
-#ifdef __SWITCH2__
 #include "../../switch2/host/switch2_splitscreen.h"
-#endif
+#include "../../switch2/host/switch2_drako3d.h"
+#include "../../switch2/host/switch2_perf.h"
 #endif
 #include <pthread.h>
 #include <stdarg.h>
@@ -1018,6 +1018,7 @@ static pthread_mutex_t dk_lock = PTHREAD_MUTEX_INITIALIZER;
 static void textures_frame_begin(void);
 static void textures_initialize(void);
 static void visibility_initialize(void);
+static uint64_t slow_now_ns(void);
 
 /* waits for frame slot index's fence (under dk_lock), saying so in the log
 if the GPU takes more than two seconds: a stop with nothing said is what a
@@ -1025,6 +1026,9 @@ faulted GPU otherwise looks like */
 static void fence_wait_said(int index, const char *what)
 {
 	int said = 0;
+#ifdef __SWITCH2__
+	uint64_t started = slow_now_ns();
+#endif
 
 	render_where = what;
 	while (dkFenceWait(&dk.fences[index], 2000000000LL) != DkResult_Success)
@@ -1041,6 +1045,9 @@ static void fence_wait_said(int index, const char *what)
 	}
 	if (said)
 		host_logf(HOST_LOG_ERROR, "deko3d: %s: the GPU finished after all", what);
+#ifdef __SWITCH2__
+	switch2_perf_renderer_fence_wait((slow_now_ns() - started) / 1000);
+#endif
 }
 
 /* ---------- the slow frames' figures (host_sdl2.c's frame_statistics)
@@ -1239,6 +1246,9 @@ static void command_memory_roll(void)
 	command_memory_begin();
 	dk.command_rolled_bytes = used;
 	profile.frame.rollovers++;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_rollover();
+#endif
 	profile_mark(trace.pass);
 }
 
@@ -1404,6 +1414,9 @@ static DkGpuAddr upload_copy(const void *data, uint32_t size)
 	}
 	memcpy((char *)dk.upload_cpu + dk.frame * UPLOAD_SLICE_SIZE + offset, data, size);
 	dk.upload_used = offset + size;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_upload(size);
+#endif
 	return dk.upload_gpu + dk.frame * UPLOAD_SLICE_SIZE + offset;
 }
 
@@ -1843,8 +1856,10 @@ static int readback_make(uint32_t width, uint32_t height)
 	maker.pitchStride = pitch;
 	dkImageLayoutInitialize(&layout, &maker);
 	size = (uint32_t)dkImageLayoutGetSize(&layout);
-	if (dk.readback_memory)
+	if (dk.readback_memory) {
+		queue_wait_idle();
 		dkMemBlockDestroy(dk.readback_memory);
+	}
 	dk.readback_memory = memory_block(size, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached |
 		DkMemBlockFlags_Image, NULL);
 	dk.readback_size = dk.readback_memory ? size : 0;
@@ -3061,6 +3076,11 @@ static void hud_image_receive(const struct dk_command_hud_image *command)
 		return;
 	}
 	source = dkMemBlockGetGpuAddr(memory);
+#ifdef __SWITCH2__
+	/* HUD memory is CPU-cached; clean again immediately before the copy in
+	   case the decode worker and render thread used different cores. */
+	armDCacheClean(levels.texels, levels.bytes);
+#endif
 	textures_fence(1);
 	for (level = 0; level < levels.levels; level++)
 	{
@@ -3278,7 +3298,11 @@ static struct target *target_sampled(uint32_t data)
 	}
 	if (best->drawn)
 	{
-		barrier(DkBarrier_Fragments, DkInvalidateFlags_Image);
+		barrier(DkBarrier_Fragments, DkInvalidateFlags_Image
+#ifdef __SWITCH2__
+			| switch2_drako3d_copy_invalidate_flags()
+#endif
+		);
 		best->drawn = 0;
 	}
 	tex.targets_sampled = 1;
@@ -3460,7 +3484,11 @@ static struct composite *composite_sampled(uint32_t data, uint32_t levels)
 			dkCmdBufBlitImage(dk.commands, &source, &from, &destination, &to, DkBlitFlag_FilterLinear, 0);
 		}
 	}
-	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+	barrier(DkBarrier_Full, DkInvalidateFlags_Image
+#ifdef __SWITCH2__
+		| switch2_drako3d_copy_invalidate_flags()
+#endif
+	);
 	composite->copied = 1;
 	composite->rendered_levels = rendered;
 	composite->stamp = dk.target_clock;

@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+static struct switch2_perf_stats renderer_stats;
 #if defined(__SWITCH2__)
 #include <stdio.h>
 #include <switch.h>
@@ -51,6 +52,37 @@ void switch2_perf_add_memory(struct switch2_perf_stats *stats, uint64_t bytes)
 {
 	if (bytes > stats->memory_peak)
 		stats->memory_peak = bytes;
+}
+
+void switch2_perf_add_upload(struct switch2_perf_stats *stats, uint64_t bytes)
+{
+	stats->upload_bytes += bytes;
+}
+
+void switch2_perf_add_upload_rollover(struct switch2_perf_stats *stats)
+{
+	stats->upload_rollovers++;
+}
+
+void switch2_perf_add_fence_wait(struct switch2_perf_stats *stats, uint64_t wait_us)
+{
+	stats->fence_waits++;
+	stats->fence_wait_us += wait_us;
+}
+
+void switch2_perf_renderer_upload(uint64_t bytes)
+{
+	switch2_perf_add_upload(&renderer_stats, bytes);
+}
+
+void switch2_perf_renderer_rollover(void)
+{
+	switch2_perf_add_upload_rollover(&renderer_stats);
+}
+
+void switch2_perf_renderer_fence_wait(uint64_t wait_us)
+{
+	switch2_perf_add_fence_wait(&renderer_stats, wait_us);
 }
 
 void switch2_perf_record_frame(struct switch2_perf_stats *stats, double cpu_ms, double gpu_ms,
@@ -134,13 +166,18 @@ void switch2_perf_flush(struct switch2_perf_stats *stats, const char *scene, con
 	fprintf(file, "{\"runs\":[{\"scene\":\"%s\",\"mode\":\"%s\",\"refresh_hz\":%d,"
 		"\"cpu_ms\":{\"mean\":%.3f,\"p50\":%.3f,\"p95\":%.3f,\"p99\":%.3f,\"max\":%.3f},"
 		"\"gpu_ms\":{\"mean\":%.3f},\"submit_wait_us\":%llu,\"acquire_max_us\":%llu,"
-		"\"fence_max_us\":%llu,\"shader\":{\"count\":%llu,\"total_ms\":%.3f,\"mean_ms\":%.3f,"
+		"\"fence_max_us\":%llu,\"renderer_sync\":{\"upload_bytes\":%llu,\"upload_rollovers\":%llu,"
+		"\"fence_waits\":%llu,\"fence_wait_us\":%llu},\"shader\":{\"count\":%llu,\"total_ms\":%.3f,\"mean_ms\":%.3f,"
 		"\"max_ms\":%.3f},\"map_load_ms\":%.3f,\"memory_peak_bytes\":%llu,"
 		"\"heap_total_bytes\":%llu,\"heap_free_bytes\":%llu}]}",
 		scene, mode, switch2PlatformRefreshRate(), summary.mean, summary.p50, summary.p95,
 		summary.p99, summary.max, stats->frame_count ? stats->gpu_total_ms / stats->frame_count : 0.0,
 		(unsigned long long)stats->submit_wait_us, (unsigned long long)stats->acquire_max_us,
-		(unsigned long long)stats->fence_max_us, (unsigned long long)stats->shader_count,
+		(unsigned long long)stats->fence_max_us, (unsigned long long)(stats->upload_bytes + renderer_stats.upload_bytes),
+		(unsigned long long)(stats->upload_rollovers + renderer_stats.upload_rollovers),
+		(unsigned long long)(stats->fence_waits + renderer_stats.fence_waits),
+		(unsigned long long)(stats->fence_wait_us + renderer_stats.fence_wait_us),
+		(unsigned long long)stats->shader_count,
 		stats->shader_total_ms, stats->shader_count ? stats->shader_total_ms / stats->shader_count : 0.0,
 		stats->shader_max_ms, map_load_ms, (unsigned long long)stats->memory_peak,
 		(unsigned long long)stats->heap_total, (unsigned long long)stats->heap_free);
