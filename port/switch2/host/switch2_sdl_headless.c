@@ -45,6 +45,17 @@ runtime's and a search is FindFirstFile's.
 #include <unistd.h>
 #endif
 
+#ifdef __SWITCH2__
+void warthog_log(const char *level, const char *format, ...);
+
+void host_storage_commit(void)
+{
+	Result result = fsdevCommitDevice("sdmc");
+	if (R_FAILED(result))
+		warthog_log("WARN", "sd card: the filesystem was not committed (%08x)", result);
+}
+#endif
+
 static char headless_error[128] = "";
 
 static void headless_set_error(const char *text)
@@ -237,6 +248,23 @@ const char *SDL_GetBasePath(void)
 
 	if (!base[0])
 	{
+#ifdef __SWITCH2__
+		const char *root = getenv("HALO_DATA_ROOT");
+		size_t length;
+
+		if (!root || !*root)
+			root = "sdmc:/switch/warthog";
+		length = strlen(root);
+		if (length + (root[length - 1] != '/') >= sizeof(base))
+		{
+			headless_set_error("data root path is too long");
+			return NULL;
+		}
+		memcpy(base, root, length);
+		if (base[length - 1] != '/')
+			base[length++] = '/';
+		base[length] = 0;
+#else
 		ssize_t length = readlink("/proc/self/exe", base, sizeof(base) - 2);
 		char *slash;
 
@@ -249,6 +277,7 @@ const char *SDL_GetBasePath(void)
 		slash = strrchr(base, '/');
 		if (slash)
 			slash[1] = 0;
+#endif
 	}
 	return base;
 }
