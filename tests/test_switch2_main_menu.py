@@ -26,6 +26,13 @@ class RendererAddressTest(unittest.TestCase):
 
 
 class SharedRendererTest(unittest.TestCase):
+    def test_build_selects_shared_renderer(self):
+        source = (ROOT / "port/switch2/engine_build.py").read_text()
+        for name in ("d3d8_dk.c", "dk_shaders.c", "nv2a_psh_dk.c", "nv2a_vsh_dk.c",
+                     "ui_overlay_dk.c", "xbox_textures_dk.c", "guest_sdl_switch.c"):
+            self.assertIn(name, source)
+        self.assertIn("OPENGL_ONLY", source)
+
     def test_switch2_presentation_and_descriptor_invalidation(self):
         source = (ROOT / "port/switch/host/host_dk.c").read_text()
         self.assertFalse((ROOT / "port/switch2/host/host_dk.c").exists())

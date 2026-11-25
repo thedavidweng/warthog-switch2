@@ -430,12 +430,12 @@ static unsigned long decoded_bytes(const struct xgpu_texture_description *descri
 
 static struct
 {
-	unsigned long address;
+	uintptr_t address;
 	float reach;
 } reaches[REACH_LIMIT];
 static unsigned long reach_count, reach_next;
 
-static void reach_note(const struct xgpu_texture_description *description, unsigned long address,
+static void reach_note(const struct xgpu_texture_description *description, uintptr_t address,
 	const unsigned char *decoded)
 {
 	float reach = 0.0f;
@@ -482,11 +482,11 @@ static void reach_note(const struct xgpu_texture_description *description, unsig
 	}
 	reaches[index].address = address;
 	reaches[index].reach = reach;
-	platform_log("3D texture %lux%lux%lu at %08lx: reaches %.3f of its box's 0.866 from its centre", description->width,
-		description->height, description->depth, address, reach);
+	platform_log("3D texture %lux%lux%lu at %p: reaches %.3f of its box's 0.866 from its centre", description->width,
+		description->height, description->depth, (void *)address, reach);
 }
 
-float dk_texture_reach(unsigned long address)
+float dk_texture_reach(uintptr_t address)
 {
 	unsigned long index;
 
@@ -593,7 +593,7 @@ static void upload(uint32_t id, uint32_t kind, const struct xgpu_texture_descrip
 			}
 		}
 		if (description->depth > 1 && !description->cube_map)
-			reach_note(description, (unsigned long)base, decoded);
+			reach_note(description, (uintptr_t)base, decoded);
 		command = dk_stream_command(DK_COMMAND_TEXTURE, sizeof(*command));
 		command->format = DK_TEXTURE_BGRA;
 		command->source = (dk_addr_t)(uintptr_t)decoded;
@@ -1124,7 +1124,11 @@ uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kin
 		xgpu_texture_describe(format_word, size_word, &entry->description);
 		entry->kind = entry->description.cube_map ? DK_TEXTURE_CUBE : entry->description.depth > 1 ? DK_TEXTURE_3D :
 			DK_TEXTURE_2D;
+#ifdef HALO_64BIT
+		entry->address = (unsigned int)data | PLATFORM_CONTIGUOUS_BASE;
+#else
 		entry->address = (unsigned long)PLATFORM_PHYSICAL_TO_VIRTUAL(data);
+#endif
 		entry->size = xgpu_texture_face_size(&entry->description) * (entry->description.cube_map ? 6 : 1);
 		entry->generation = 0;
 		entry->override = -1;
@@ -1163,15 +1167,24 @@ uint32_t dk_texture_get(const DWORD *resource, const D3DCOLOR *palette, int *kin
 				entry->override = -1;
 		}
 		if ((entry->override < 0 || !hud_image(entry->override, &levels)) &&
+#ifdef HALO_64BIT
+			platform_is_contiguous(xbox_pointer(entry->address)) &&
+			platform_is_contiguous(xbox_pointer(entry->address + entry->size - 1)))
+#else
 			platform_is_contiguous((void *)entry->address) &&
 			platform_is_contiguous((void *)(entry->address + entry->size - 1)))
+#endif
 		{
 			if (config_boolean("debug.texture_log"))
 				platform_log("texture upload %08lx fmt %02lx %lux%lux%lu, %lu levels, kind %u, size %lu gen %lu id %u",
 					(unsigned long)data, (unsigned long)entry->description.format, entry->description.width,
 					entry->description.height, entry->description.depth, entry->description.levels, (unsigned)entry->kind,
 					entry->size, entry->generation, (unsigned)entry->id);
+#ifdef HALO_64BIT
+			upload(entry->id, entry->kind, &entry->description, xbox_pointer(entry->address), palette,
+#else
 			upload(entry->id, entry->kind, &entry->description, (const unsigned char *)entry->address, palette,
+#endif
 				custom_edition_texels_swizzle(entry->address));
 		}
 	}
@@ -1279,7 +1292,11 @@ static uint32_t custom_edition_texels_swizzle(unsigned long address)
 
 void halo_custom_edition_texels_channels(const void *texels, unsigned char channel_order)
 {
+#ifdef HALO_64BIT
+	unsigned long address = XBOX_ADDRESS(texels);
+#else
 	unsigned long address = (unsigned long)texels;
+#endif
 	unsigned long index;
 
 	if (channel_order >= NUMBER_OF_CUSTOM_EDITION_CHANNEL_ORDERS)

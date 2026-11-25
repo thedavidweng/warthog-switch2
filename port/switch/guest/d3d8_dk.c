@@ -41,7 +41,9 @@ void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long wi
 
 /* what the context supports: xbox_textures.c reads it (as d3d8_gl.c
 defines it on Android); nothing here is OpenGL, so nothing is supported */
+#ifdef HALO_GL_ES
 struct xgpu_capabilities xgpu_capabilities;
+#endif
 
 /* ---------- the screen's width
 
@@ -1687,6 +1689,10 @@ static void parse_declaration(struct vertex_shader_object *object, const DWORD *
 	}
 }
 static void vertex_shader_note(struct vertex_shader_object *object);
+#ifdef __SWITCH2__
+static struct vertex_shader_object **vertex_shaders_by_id;
+static unsigned long vertex_shaders_by_id_count;
+#endif
 
 HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWORD *function, DWORD *handle, DWORD usage)
 {
@@ -1712,13 +1718,31 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 	parse_declaration(object, declaration);
 	vertex_shader_note(object);
 	/* odd values are FVF codes; programmable shader handles are even */
+#ifdef __SWITCH2__
+	if (object->id >= vertex_shaders_by_id_count || vertex_shaders_by_id[object->id] != object)
+	{
+		free(object->instructions);
+		free(object);
+		return E_OUTOFMEMORY;
+	}
+	*handle = (DWORD)((object->id + 1) * 2);
+#else
 	*handle = (DWORD)object;
+#endif
 	return S_OK;
 }
 
 static struct vertex_shader_object *vertex_shader_from_handle(DWORD handle)
 {
+#ifdef __SWITCH2__
+	unsigned long id = handle / 2 - 1;
+	struct vertex_shader_object *object = handle && !(handle & 1) && id < vertex_shaders_by_id_count ?
+		vertex_shaders_by_id[id] : NULL;
+	if (!object)
+		return NULL;
+#else
 	struct vertex_shader_object *object = (struct vertex_shader_object *)handle;
+#endif
 
 	if (!handle || (handle & 1) || object->signature != VERTEX_SHADER_SIGNATURE)
 		return NULL;
@@ -1833,8 +1857,10 @@ and on the console. Written once, a second into the game
 
 /* the vertex shader objects by their id (d3d8_gl.c's list, kept for its
 program records: the records name the programs by id) */
+#ifndef __SWITCH2__
 static struct vertex_shader_object **vertex_shaders_by_id;
 static unsigned long vertex_shaders_by_id_count;
+#endif
 
 static void vertex_shader_note(struct vertex_shader_object *object)
 {
@@ -2649,7 +2675,7 @@ static void pixel_key_make(struct nv2a_pixel_shader_key *key, float texture_scal
 	{
 		D3DBaseTexture *texture = device.textures[texture_clip_stage];
 		float reach = texture && texture->Data ?
-			dk_texture_reach((unsigned long)PLATFORM_PHYSICAL_TO_VIRTUAL(texture->Data)) : -1.0f;
+			dk_texture_reach((uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(texture->Data)) : -1.0f;
 
 		if (reach >= 0.0f)
 		{
@@ -2823,9 +2849,13 @@ not in the tag cache, as at first, copied the map's own each draw and slowed
 every game */
 static BOOL indices_fixed(const WORD *indices, unsigned long count)
 {
-	unsigned long start = (unsigned long)(uintptr_t)indices, end = start + count * sizeof(WORD);
+	uintptr_t start = (uintptr_t)indices, end = start + count * sizeof(WORD);
 	/* (Warthog's tag cache: platform.h, mapped at its address by xbox_memory.c) */
+#ifdef HALO_64BIT
+	uintptr_t custom = platform_ce_tag_cache_ready ? (uintptr_t)xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE) : 0;
+#else
 	unsigned long custom = platform_ce_tag_cache_ready ? (unsigned long)PLATFORM_CE_TAG_CACHE_BASE : 0;
+#endif
 
 	if (platform_is_contiguous(indices) && platform_is_contiguous((const char *)indices + count * sizeof(WORD) - 1))
 		return TRUE;

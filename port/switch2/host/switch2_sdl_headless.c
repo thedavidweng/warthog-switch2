@@ -219,6 +219,7 @@ bool SDL_RemovePath(const char *path)
 }
 
 /* whether the path is there, and what it is */
+#ifndef HALO_SWITCH2_GRAPHICAL
 bool SDL_GetPathInfo(const char *path, SDL_PathInfo *info)
 {
 	struct stat status;
@@ -240,6 +241,7 @@ bool SDL_GetPathInfo(const char *path, SDL_PathInfo *info)
 	}
 	return true;
 }
+#endif
 
 /* the executable's folder, with a / after it */
 const char *SDL_GetBasePath(void)
@@ -317,6 +319,7 @@ bool SDL_CreateDirectory(const char *path)
 	return true;
 }
 
+#ifndef HALO_SWITCH2_GRAPHICAL
 char **SDL_GlobDirectory(const char *path, const char *pattern, SDL_GlobFlags flags, int *count)
 {
     DIR *dir = opendir(path); struct dirent *entry; size_t used = 0, bytes = sizeof(char *); char **tmp = NULL, **result; char *text;
@@ -326,6 +329,7 @@ char **SDL_GlobDirectory(const char *path, const char *pattern, SDL_GlobFlags fl
     result=malloc(bytes); if (result) { text=(char *)(result+used+1); for (size_t i=0;i<used;i++) { result[i]=text; strcpy(text,tmp[i]); text+=strlen(text)+1; } result[used]=NULL; if (count) *count=(int)used; }
     for (size_t i=0;i<used;i++) free(tmp[i]); free(tmp); return result;
 }
+#endif
 
 /* ---------- no devices */
 

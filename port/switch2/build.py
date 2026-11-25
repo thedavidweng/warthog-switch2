@@ -285,6 +285,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release)
     platform_archive = BUILD / "libwarthog_platform.a"
     n.build(outputs=platform_archive, rule="switch2_ar", inputs=platform_objects)
+    n.build(outputs="switch2-engine-platform", rule="phony", inputs=platform_archive)
 
     elf = BUILD / "warthog.elf"
     n.rule(
