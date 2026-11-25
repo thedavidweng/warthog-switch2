@@ -404,7 +404,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     game = REPO_ROOT / "chupathingyce"
     n.rule(name="switch2_menus",
            command=f"{_quote(sys.executable)} {_quote(REPO_ROOT / 'tools/switch_menus.py')} "
-                   f"--out {_quote(menus_dir)} --stamp $out",
+                   f"--target switch2 --out {_quote(menus_dir)} --stamp $out",
            description="SWITCH2 MENUS $out")
     n.build(outputs=menus_stamp, rule="switch2_menus",
             implicit=[REPO_ROOT / "tools/switch_menus.py", game / "tools/port_settings.py",

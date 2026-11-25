@@ -4,6 +4,13 @@ Whole-file fixes to the engine belong here until upstream takes them. Each
 override must be listed below with its purpose and upstream destination.
 `python3 tools/switch_overrides.py` checks both console override directories.
 
+## port/linux/src/port_config.c
+
+Uses Switch 2 defaults: 1080p handheld rendering, Switch 2 display mode
+help, and stock `Normal` clock policy. The original Switch configuration keeps
+its 720p and legacy clock choices. This can be proposed upstream with a
+platform-specific configuration target.
+
 ## port/linux/src/msvc_crt.c
 
 Uses GCC AArch64 register instructions for the Switch 2 floating-point control
