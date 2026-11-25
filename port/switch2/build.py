@@ -238,6 +238,8 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     )
     objects = []
     for source in sorted((HOST_DIR).glob("*.c")):
+        if source.name == "nx2_platform.c":
+            continue
         obj = BUILD / "host" / (source.name + ".o")
         n.build(outputs=obj, rule="switch2_cc", inputs=source,
                 implicit=[header, libounce / "include" / "switch.h"],
@@ -298,4 +300,29 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
            description="SWITCH2 PROBE NRO $out")
     n.build(outputs=probe_nro, rule="switch2_probe_nro", inputs=[probe_elf, nacp, ICON])
     n.build(outputs="switch2-probe-abi", rule="phony", inputs=[probe_nro, probe_elf])
+
+    sdl_objects = []
+    for source in (PORT_DIR / "probe" / "sdl_probe.c", HOST_DIR / "nx2_platform.c"):
+        obj = BUILD / "probe" / (source.name + ".o")
+        n.build(outputs=obj, rule="switch2_cc", inputs=source,
+                variables={"cflags": f"{code_flags} {includes} -ffunction-sections -fdata-sections"})
+        sdl_objects.append(obj)
+    sdl_elf = BUILD / "sdl_probe.elf"
+    n.rule(name="switch2_sdl_probe_link",
+           command=(f"$switch2_gxx -specs=$switch2_specs -g {CPU_FLAGS} -o $out $in "
+                    f"{library_paths} -lSDL2 -lkaihen -lounce -lm -Wl,--gc-sections "
+                    "-Wl,--wrap=SDL_VideoInit -Wl,--wrap=SDL_VideoQuit "
+                    "-Wl,--wrap=hidInitializeKeyboard -Wl,--wrap=hidInitializeMouse "
+                    "-Wl,--wrap=smGetServiceWrapper -Wl,--wrap=__syscall_thread_create "
+                    "-Wl,--wrap=hidInitializeTouchScreen -Wl,-Map,$out.map"),
+           description="SWITCH2 SDL PROBE LINK $out")
+    n.build(outputs=sdl_elf, rule="switch2_sdl_probe_link", inputs=sdl_objects)
+    sdl_nro = BUILD / "sdl_probe.nro"
+    n.rule(name="switch2_sdl_probe_nro",
+           command=(f"{devkitpro / 'tools' / 'bin' / 'elf2nro'} "
+                    f"{(Path.cwd() / sdl_elf).resolve()} {(Path.cwd() / sdl_nro).resolve()}"
+                    f" --icon={ICON.resolve()} --nacp={(Path.cwd() / nacp).resolve()}"),
+           description="SWITCH2 SDL PROBE NRO $out")
+    n.build(outputs=sdl_nro, rule="switch2_sdl_probe_nro", inputs=[sdl_elf, nacp, ICON])
+    n.build(outputs="switch2-probe-sdl", rule="phony", inputs=[sdl_nro, sdl_elf])
     n.newline()

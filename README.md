@@ -188,9 +188,8 @@ is in [LICENSE](LICENSE).
 
 ### Third-party notices
 
-None of the following is vendored into this repository; the build consumes it
-from its own source. Their licences are honoured and their notices kept beside
-any code that is copied in.
+Dependencies are consumed from their own sources except where noted. Their
+licences are honoured and notices kept beside any code copied in.
 
 - **Drako3D** — Zlib. `ouncebrew/drako3d`, the Switch 2 low-level GPU API.
 - **UAM2** — Zlib, with Mesa's MIT-licensed shader compiler components.
@@ -202,11 +201,11 @@ any code that is copied in.
 - **kaiHEN** — GPL-2.0 for the environment itself; `libkaihen`, the client
   library this port links, is ISC. The environment is assumed, never
   modified.
-- **dolphin-nx** — GPL-2.0-or-later as a whole; `NaGaa95/dolphin-nx`'s
-  `nx2_platform` and `nx2_gameshare` modules are **MIT** and are adopted
-  under MIT with their copyright, `SPDX-License-Identifier: MIT` header and an
-  attribution comment naming the upstream and the reviewed revision. MIT code
-  stays MIT and is not relicensed.
+- **dolphin-nx** — GPL-2.0-or-later as a whole; the imported `nx2_platform`
+  subset is MIT, from `NaGaa95/dolphin-nx` at
+  `7fb685b353e19a9a5848e9bd658945d1f9cd382a`. Its original SPDX headers and
+  source attribution are preserved. The upstream `nx2_gameshare` helper is
+  also MIT.
 - **nanosvg** — Zlib, in `port/switch/third_party`, drawn from upstream's port.
 
 ### No console SDK, no game assets
