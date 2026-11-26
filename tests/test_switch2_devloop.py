@@ -234,6 +234,12 @@ class LogsTest(unittest.TestCase):
                                self.logs.name, *arguments], cwd=ROOT, env=environment,
                               capture_output=True, text=True)
 
+    def test_unreachable_ftp_reports_clean_error_without_traceback(self):
+        result = self.run_logs("--target", "switch2", "--host", "127.0.0.1", "--port", "1")
+        self.assertEqual(1, result.returncode)
+        self.assertIn("cannot reach the console's FTP server", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_fetches_and_classifies_latest_run(self):
         log = (b"--- launch ---\nfirmware: 20.0\nlaunch context: AppletType Application\n"
                b"renderer: Drako3D\nuam2rt: ready\nWarthog for Switch 2 1 (debug build)\n"

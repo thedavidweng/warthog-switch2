@@ -126,18 +126,23 @@ def switch2_main(argv):
         if not args.host:
             parser.error("pass --host or set WARTHOG_SWITCH2_HOST")
         SWITCH2_LOCAL.mkdir(parents=True, exist_ok=True)
-        with ftplib.FTP() as ftp:
-            ftp.connect(args.host, args.port, timeout=20)
-            ftp.login()
-            names = ftp.nlst(SWITCH2_REMOTE)
-            if "warthog.log" not in (os.path.basename(name) for name in names):
-                raise FileNotFoundError("no warthog.log on the console")
-            for name in names:
-                name = os.path.basename(name)
-                if name == "warthog.log" or name.endswith("_probe.log"):
-                    data = io.BytesIO()
-                    ftp.retrbinary("RETR " + SWITCH2_REMOTE + "/" + name, data.write)
-                    (SWITCH2_LOCAL / name).write_bytes(data.getvalue())
+        try:
+            with ftplib.FTP() as ftp:
+                ftp.connect(args.host, args.port, timeout=20)
+                ftp.login()
+                names = ftp.nlst(SWITCH2_REMOTE)
+                if "warthog.log" not in (os.path.basename(name) for name in names):
+                    raise FileNotFoundError("no warthog.log on the console")
+                for name in names:
+                    name = os.path.basename(name)
+                    if name == "warthog.log" or name.endswith("_probe.log"):
+                        data = io.BytesIO()
+                        ftp.retrbinary("RETR " + SWITCH2_REMOTE + "/" + name, data.write)
+                        (SWITCH2_LOCAL / name).write_bytes(data.getvalue())
+        except (OSError, ftplib.Error) as error:
+            print("cannot reach the console's FTP server at %s:%d: %s" % (args.host, args.port, error),
+                  file=sys.stderr)
+            raise SystemExit(1)
     text = (SWITCH2_LOCAL / "warthog.log").read_text(encoding="utf-8", errors="replace")
     text = text.rsplit("--- launch ---", 1)[-1]
     for line in text.splitlines():
