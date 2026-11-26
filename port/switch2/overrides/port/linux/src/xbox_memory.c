@@ -54,9 +54,18 @@ takes the address as a hint, which every caller here checks it got) */
 #ifdef HALO_ANDROID
 #include <stdio.h>
 #endif
+#ifdef __SWITCH2__
+#include <stdint.h>
+#endif
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#ifdef __SWITCH2__
+#define SWITCH2_CONTIGUOUS_CHUNK_SIZE 0x01000000U
+static uint32_t switch2_committed_chunks;
+extern void host_dk_window_chunk_committed(uint64_t address, uint64_t size);
+#endif
 
 #ifdef HALO_64BIT
 #define PAGE_SIZE_BYTES 0x1000U
@@ -531,11 +540,30 @@ void *platform_contiguous_alloc(unsigned long size, unsigned long alignment,
 	address = (void *)(PLATFORM_CONTIGUOUS_BASE + first * PAGE_SIZE_BYTES);
 #endif
 #ifdef __SWITCH2__
-	if (mmap(address, count * PAGE_SIZE_BYTES, PROT_READ | PROT_WRITE,
-		MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != address)
 	{
-		pthread_mutex_unlock(&arena_lock);
-		return NULL;
+		size_t offset_start = (size_t)first * PAGE_SIZE_BYTES;
+		size_t offset_end = (size_t)(first + count) * PAGE_SIZE_BYTES;
+		unsigned int chunk_first = (unsigned int)(offset_start / SWITCH2_CONTIGUOUS_CHUNK_SIZE);
+		unsigned int chunk_last = (unsigned int)((offset_end - 1) / SWITCH2_CONTIGUOUS_CHUNK_SIZE);
+		unsigned int ci;
+
+		for (ci = chunk_first; ci <= chunk_last && ci < 32; ci++)
+		{
+			if (!(switch2_committed_chunks & (1U << ci)))
+			{
+				void *chunk_addr = xbox_pointer(PLATFORM_CONTIGUOUS_BASE +
+					ci * SWITCH2_CONTIGUOUS_CHUNK_SIZE);
+				if (mmap(chunk_addr, SWITCH2_CONTIGUOUS_CHUNK_SIZE, PROT_READ | PROT_WRITE,
+					MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) != chunk_addr)
+				{
+					pthread_mutex_unlock(&arena_lock);
+					return NULL;
+				}
+				switch2_committed_chunks |= (1U << ci);
+				host_dk_window_chunk_committed((uint64_t)(uintptr_t)chunk_addr,
+					(uint64_t)SWITCH2_CONTIGUOUS_CHUNK_SIZE);
+			}
+		}
 	}
 #endif
 	memory_watch_forget(address, count * PAGE_SIZE_BYTES);
@@ -796,6 +824,7 @@ void platform_xbox_memory_reset_for_shutdown(void)
 {
 	pthread_mutex_lock(&arena_lock);
 	arena_reserved = FALSE;
+	switch2_committed_chunks = 0;
 	memset(page_protection, 0, sizeof(page_protection));
 	memset(block_page_count, 0, sizeof(block_page_count));
 #ifdef HALO_CUSTOM_EDITION

@@ -1,9 +1,12 @@
 #include <switch.h>
 #include <errno.h>
 #include <pthread.h>
+#include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include "nx2_platform.h"
 
 static pthread_mutex_t seek_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -43,9 +46,17 @@ long sysconf(int name)
 	case _SC_PAGESIZE: return 4096;
 	case _SC_PHYS_PAGES: return (long)(heapGetTotalSize() / 4096);
 	case _SC_AVPHYS_PAGES: return (long)(heapGetFreeSize() / 4096);
-	case _SC_NPROCESSORS_ONLN: return 4;
+	case _SC_NPROCESSORS_ONLN: { int c = nx2CoreCount(); return c > 0 ? c : 6; }
 	default: errno = EINVAL; return -1;
 	}
+}
+
+int getrusage(int who, struct rusage *usage)
+{
+	(void)who;
+	if (!usage) { errno = EFAULT; return -1; }
+	memset(usage, 0, sizeof(*usage));
+	return 0;
 }
 
 int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *request, struct timespec *remaining)

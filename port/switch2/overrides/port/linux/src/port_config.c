@@ -136,7 +136,7 @@ had it: its DirectSound filtered every 3D voice through its HRTFs, on TV
 stereo too (DirectSoundUseFullHRTF). Surround output ignores it. A
 console's build keeps it off: the original Xbox has its own hardware path,
 and the others have not been tried with it. */
-#ifdef HALO_CONSOLE
+#if defined(HALO_CONSOLE) || defined(HALO_SWITCH_CONSOLE)
 #define DEFAULT_AUDIO_HRTF "\"off\""
 #else
 #define DEFAULT_AUDIO_HRTF "\"on\""
@@ -295,10 +295,16 @@ static const struct config_setting config_settings[] =
 	{ "display.resolution", _config_string, "\"native\"", "HALO_RESOLUTION", _environment_value, _platform_desktop,
 		"The resolution in fullscreen and borderless. \"native\" uses the\n"
 		"display's own. Or give a size, like \"1920x1080\". The smallest is 640x480." },
+#ifdef __SWITCH2__
+	{ "display.refresh_rate", _config_real, "120", "HALO_REFRESH_RATE", _environment_value, _platform_all,
+		"Target display refresh rate in Hz on Switch 2 (60 or 120).\n"
+		"120 Hz is available up to 1440p docked or 1080p handheld." },
+#else
 	{ "display.refresh_rate", _config_real, "0.0", "HALO_REFRESH_RATE", _environment_value, _platform_desktop,
 		"Fullscreen's refresh rate in Hz (the nearest the display has at the\n"
 		"resolution). 0 keeps the display's own. Windows and X11 only: Wayland,\n"
 		"XWayland, gamescope and the Mac keep their own." },
+#endif
 	{ "display.window_size", _config_string, "\"\"", "HALO_WINDOW_SIZE", _environment_value, _platform_desktop,
 		"The window's size, like \"1920x1080\". The smallest is 640x480.\n"
 		"Leave it empty to use display.window_scale." },
@@ -826,6 +832,30 @@ static const struct config_setting config_settings[] =
 		_environment_value, _platform_android,
 		"Invert the gyroscope's up and down. With true, tilting the controller\n"
 		"up looks down. The stick's invert is separate." },
+#ifdef __SWITCH2__
+	{ "input.gyro_zoom_sensitivity", _config_real, "0.75", "HALO_GYRO_ZOOM_SENSITIVITY",
+		_environment_value, _platform_android,
+		"Gyroscope sensitivity multiplier while zoomed in with a scope." },
+	{ "input.joycon_mouse", _config_string, "\"auto\"", "HALO_JOYCON_MOUSE",
+		_environment_value, _platform_android,
+		"Switch 2 Joy-Con 2 optical mouse aiming mode: \"auto\", \"right\",\n"
+		"\"left\", \"both\", or \"off\"." },
+	{ "input.joycon_mouse_sensitivity", _config_real, "1.0", "HALO_JOYCON_MOUSE_SENSITIVITY",
+		_environment_value, _platform_android,
+		"Horizontal optical mouse sensitivity for Joy-Con 2 mouse aiming." },
+	{ "input.joycon_mouse_vertical_sensitivity", _config_real, "1.0", "HALO_JOYCON_MOUSE_VERTICAL_SENSITIVITY",
+		_environment_value, _platform_android,
+		"Vertical optical mouse sensitivity for Joy-Con 2 mouse aiming." },
+	{ "input.joycon_mouse_zoom_sensitivity", _config_real, "0.75", "HALO_JOYCON_MOUSE_ZOOM_SENSITIVITY",
+		_environment_value, _platform_android,
+		"Optical mouse sensitivity multiplier while zoomed in with a scope." },
+	{ "input.joycon_mouse_invert_y", _config_boolean, "false", "HALO_JOYCON_MOUSE_INVERT_Y",
+		_environment_value, _platform_android,
+		"Invert vertical aiming for Switch 2 Joy-Con 2 optical mouse mode." },
+	{ "input.joycon_mouse_aim_assist", _config_boolean, "true", "HALO_JOYCON_MOUSE_AIM_ASSIST",
+		_environment_value, _platform_android,
+		"Keep controller aim magnetism enabled while aiming with Joy-Con 2 mouse mode." },
+#endif
 #endif
 
 	/* ---- controls: the keyboard and mouse's own (port/linux/src/xinput_sdl.c) */

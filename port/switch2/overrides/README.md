@@ -24,7 +24,9 @@ Drako3D renderer. This can be proposed upstream for the port.
 
 ## port/linux/src/d3d8_resources.c
 
-Uses a 32-bit format argument after the LP64 source rewrite. This can be
+Uses a 32-bit format argument after the LP64 source rewrite and tracks LP64
+`D3DDevice_CreateIndexBuffer` allocations so the Drako3D guest treats dynamic
+index buffers as inline rather than fixed contiguous geometry. This can be
 proposed upstream for the LP64 build.
 
 ## port/linux/src/xbox_heap.c
@@ -66,3 +68,49 @@ Writes persistent checkpoints atomically through a synced `.part` file and remov
 ## source/saved games/game_state.c
 
 Relocates LP64 native pointers in saved memory pools and LRUV caches before validating a checkpoint image.
+
+## port/linux/src/xinput_sdl.c
+
+Defaults the Switch 2 controller prompt scheme to `PROMPT_SCHEME_NINTENDO`
+before the first input event so menu and overlay prompts match physical Switch
+buttons immediately on boot. This can be proposed upstream under
+`HALO_SWITCH_CONSOLE`.
+
+## port/linux/game/menu_tags.c
+
+Draws Nintendo Switch overlay button glyphs (`B` select, `A` back) in classic
+Xbox and Gearbox menu footers as well as modern Chupathingy menus when
+`platform_prompt_scheme()` is `PROMPT_SCHEME_NINTENDO`. This can be proposed
+upstream for console prompt parity.
+
+## source/interface/hud_messaging.c
+
+Draws Nintendo Switch overlay button glyphs (`B`, `A`, `Y`, `X`, `L`, `R`, `ZL`,
+`ZR`, `+`, `−`) instead of raw Xbox sprites in campaign/gameplay HUD prompts
+when `platform_prompt_scheme()` is `PROMPT_SCHEME_NINTENDO`. This can be
+proposed upstream for console prompt parity.
+
+## source/interface/ui_widget.c
+
+Draws Nintendo Switch overlay button glyphs instead of raw Xbox `iface_map2`
+sprites inside inline menu and pause dialog text when `platform_prompt_scheme()`
+is `PROMPT_SCHEME_NINTENDO`. This can be proposed upstream for console prompt
+parity.
+
+## server/src/server_commands.c
+
+Uses a 32-bit unsigned literal (`0U`) in `command_banlist` after the LP64
+source rewrite converts `%lu` to `%u`. This can be proposed upstream for the
+LP64 build.
+
+## source/game/player_control.c
+
+Applies configured Switch 2 zoom sensitivity multipliers to optical mouse and
+gyroscope aiming when zoomed in. This can be proposed upstream under
+`HALO_SWITCH_CONSOLE`.
+
+## port/linux/game/menu_functions.c
+
+Exposes the fourth Switch 2 controller settings page (`JOY-CON MOUSE`) and its
+help string in Controls Setup. This can be proposed upstream under
+`HALO_SWITCH_CONSOLE`.

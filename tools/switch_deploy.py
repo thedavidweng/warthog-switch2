@@ -128,6 +128,24 @@ def connect(host: str, port: int, user: str, password) -> ftplib.FTP:
         return None
 
 
+def _remote_size(ftp: ftplib.FTP, name: str, expected: int) -> int:
+    """Query the remote file size, falling back to LIST when SIZE returns 0."""
+    actual = ftp.size(name)
+    if actual == expected:
+        return actual
+    if (actual is None or actual == 0) and expected > 0:
+        entries = []
+        try:
+            ftp.retrlines("LIST", entries.append)
+        except (OSError, ftplib.Error):
+            return actual if actual is not None else -1
+        for entry in entries:
+            parts = entry.split(None, 8)
+            if len(parts) == 9 and parts[8] == name and parts[4].isdigit():
+                return int(parts[4])
+    return actual if actual is not None else -1
+
+
 def upload(ftp: ftplib.FTP, destination: str, files) -> None:
     """each file straight over the old one, with the size checked after
 
@@ -147,7 +165,7 @@ def upload(ftp: ftplib.FTP, destination: str, files) -> None:
         with path.open("rb") as handle:
             ftp.storbinary("STOR " + path.name, handle)
         expected = path.stat().st_size
-        actual = ftp.size(path.name)
+        actual = _remote_size(ftp, path.name, expected)
         if actual != expected:
             print("warning: %s is %d bytes on the card, %d expected; the transfer was cut short"
                   % (path.name, actual, expected), file=sys.stderr)

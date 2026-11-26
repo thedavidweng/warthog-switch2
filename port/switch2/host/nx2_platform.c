@@ -88,6 +88,7 @@ Result nx2SetCpuBoost(bool on)
 // ------------------------------------------------------------------------------------------------ display
 static Mutex s_displayMutex;
 static bool s_frameGeneration = false;
+static uint32_t s_requestedRefresh = 60;
 static struct switch2_display_state s_display = {
 	.internal_width = 1920, .internal_height = 1080,
 	.output_width = 1920, .output_height = 1080,
@@ -132,10 +133,17 @@ static void nx2ReadTvResolution(void)
 static void nx2ApplyMode(void)
 {
 	const bool docked = nx2Docked();
+	const uint32_t target_hz = s_requestedRefresh;
 	nx2ReadTvResolution();
 	u32 width = (u32)s_tvWidth, height = (u32)s_tvHeight;
+	if (docked && target_hz > 60 && s_display.internal_height <= 1440 && (width > 2560 || height > 1440))
+	{
+		width = 2560;
+		height = 1440;
+	}
+	s_display.requested_refresh = target_hz;
 	switch2_display_set_output(&s_display, width, height, docked);
-	s_display.requested_refresh = switch2_display_clamp_refresh(s_display.output_width, s_display.output_height, 120);
+	s_display.requested_refresh = switch2_display_clamp_refresh(s_display.output_width, s_display.output_height, target_hz);
 	width = s_display.output_width;
 	height = s_display.output_height;
 	if (width == s_dockedWidth && height == s_dockedHeight)
@@ -154,17 +162,22 @@ static Result nx2ApplyPacing(int swap_interval)
 		swap_interval = 0;
 	Result rc = 0;
 	NWindow* window = nwindowGetDefault();
-	if (s_display.requested_refresh > 60)
+	if (swap_interval == 0)
+	{
+		if (!s_presentApplied || s_presentInterval != 0)
+			rc = nwindowSetSwapInterval(window, 0);
+	}
+	else if (s_display.requested_refresh > 60 && swap_interval == 1)
 	{
 		// (every call: a swap interval set elsewhere, by EGL or drako3d, withdraws the 120 Hz request)
 		rc = nwindowSetFrameRates(window, 0, 0, true);
 	}
-	else if (!s_presentApplied || s_presentHz != 60 || s_presentInterval != swap_interval)
+	else if (!s_presentApplied || s_presentHz != (int)s_display.requested_refresh || s_presentInterval != swap_interval)
 	{
 		rc = nwindowSetSwapInterval(window, (u32)swap_interval);
 	}
 	s_presentApplied = R_SUCCEEDED(rc);
-	s_presentHz = s_display.requested_refresh;
+	s_presentHz = (int)s_display.requested_refresh;
 	s_presentInterval = swap_interval;
 	return rc;
 }
@@ -177,15 +190,38 @@ void nx2DisplayInit(void)
 	mutexUnlock(&s_displayMutex);
 }
 
+bool nx2DisplaySetRefreshRate(uint32_t hz)
+{
+	const uint32_t target = hz > 60 ? 120 : 60;
+
+	mutexLock(&s_displayMutex);
+	if (target == s_requestedRefresh)
+	{
+		mutexUnlock(&s_displayMutex);
+		return false;
+	}
+	s_requestedRefresh = target;
+	nx2ApplyMode();
+	const bool changed = (int)s_display.requested_refresh != s_presentHz;
+	if (changed)
+		s_presentApplied = false;
+	mutexUnlock(&s_displayMutex);
+	return changed;
+}
+
 bool nx2DisplaySetFrameGeneration(bool enabled)
 {
-	if (enabled == s_frameGeneration)
-		return false;
 	mutexLock(&s_displayMutex);
+	if (enabled == s_frameGeneration && (!enabled || s_requestedRefresh > 60))
+	{
+		mutexUnlock(&s_displayMutex);
+		return false;
+	}
 	s_frameGeneration = enabled;
+	s_requestedRefresh = enabled ? 120 : 60;
 	s_display.interpolation = enabled;
 	nx2ApplyMode();
-	const bool changed = s_display.requested_refresh != s_presentHz;
+	const bool changed = (int)s_display.requested_refresh != s_presentHz;
 	if (changed)
 		s_presentApplied = false;
 	mutexUnlock(&s_displayMutex);
@@ -235,9 +271,9 @@ bool nx2DisplayUpdate(void)
 	mutexLock(&s_displayMutex);
 	const uint32_t previousRefresh = s_display.requested_refresh;
 	nx2ApplyMode();
-	// Docked at 120 Hz, every update: a renderer that sets a swap interval withdraws the 120 Hz request, and libounce
-	// caches the request, so asking again is cheap.
-	if (s_display.requested_refresh != (uint32_t)s_presentHz || (s_display.requested_refresh > 60 && nx2Docked()))
+	// Both handheld and docked at 120 Hz: swapchain creation or swap interval calls
+	// withdraw the 120 Hz request, and libounce caches it so reapplying is cheap.
+	if (!s_presentApplied || s_display.requested_refresh != (uint32_t)s_presentHz || s_display.requested_refresh > 60)
 	{
 		if (s_display.requested_refresh != previousRefresh)
 			s_presentApplied = false;
@@ -357,10 +393,29 @@ static void nx2TrackThreadFinish(int slot)
 	mutexUnlock(&s_threadsMutex);
 }
 
+static void nx2PlaceDefaultWorkerThread(void)
+{
+	static unsigned s_workerNext;
+	const u64 mask = nx2CoreMask();
+	u64 workers = mask & ~3ULL;
+	if (!workers)
+		workers = mask & ~1ULL;
+	if (!workers)
+		return;
+	const unsigned count = (unsigned)__builtin_popcountll(workers);
+	unsigned pick = __atomic_fetch_add(&s_workerNext, 1u, __ATOMIC_RELAXED) % count;
+	u64 rest = workers;
+	while (pick--)
+		rest &= rest - 1;
+	const int ideal = __builtin_ctzll(rest);
+	(void)svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal, workers);
+}
+
 static void* nx2ThreadTrampoline(void* argument)
 {
 	const Nx2ThreadStart start = *(Nx2ThreadStart*)argument;
 	free(argument);
+	nx2PlaceDefaultWorkerThread();
 	Thread* self = threadGetSelf();
 	const int slot = self ? nx2TrackThreadStart(self) : -1;
 	void* result = start.func(start.arg);
@@ -371,6 +426,8 @@ static void* nx2ThreadTrampoline(void* argument)
 int __wrap___syscall_thread_create(struct __pthread_t** thread, void* (*func)(void*), void* arg, void* stack_addr,
 								   size_t stack_size)
 {
+	if (!stack_addr && stack_size < 0x80000)
+		stack_size = 0x80000;
 	Nx2ThreadStart* start = (Nx2ThreadStart*)malloc(sizeof(Nx2ThreadStart));
 	if (!start)
 		return ENOMEM;

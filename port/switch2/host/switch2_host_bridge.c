@@ -42,14 +42,35 @@ void host_fatal(const char *format, ...)
 void host_sd_lock(void) { pthread_mutex_lock(&sd_lock); }
 void host_sd_unlock(void) { pthread_mutex_unlock(&sd_lock); }
 const char *host_data_root(void) { return "sdmc:/switch/warthog"; }
-void host_thread_place_on_helper_core(void)
+void host_thread_place_on_render_core(void)
 {
 	u64 mask = nx2CoreMask();
+	if (mask & (1ULL << 1)) {
+		svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1ULL << 1);
+		return;
+	}
 	for (int core = 1; core < 64; ++core)
 		if (mask & (1ULL << core)) {
 			svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1ULL << core);
-			break;
+			return;
 		}
+}
+void host_thread_place_on_helper_core(void)
+{
+	static unsigned next_worker;
+	u64 mask = nx2CoreMask();
+	u64 workers = mask & ~3ULL;
+	if (!workers)
+		workers = mask & ~1ULL;
+	if (!workers)
+		return;
+	unsigned count = (unsigned)__builtin_popcountll(workers);
+	unsigned pick = __atomic_fetch_add(&next_worker, 1u, __ATOMIC_RELAXED) % count;
+	u64 rest = workers;
+	while (pick--)
+		rest &= rest - 1;
+	int ideal = __builtin_ctzll(rest);
+	svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal, workers);
 }
 void host_debug_thread_backtrace(uint32_t handle, const char *who)
 {
@@ -93,6 +114,16 @@ void host_exit(int code)
 	warthog_log_close();
 	exit(code);
 }
+int host_sdl_open_url(const char *url)
+{
+	host_logf(HOST_LOG_INFO, "cannot open %s: no web browser here", url ? url : "");
+	return 0;
+}
+int launcher_welcome(char *destination, unsigned int size)
+{ (void)destination; (void)size; return 0; }
+void launcher_open_on_maps(void) {}
+void launcher_at_start(void) {}
+int launcher_restart_to_setup(void) { return 0; }
 int updater_gamescope(void) { return 0; }
 void updater_poll(void) {}
 int posix_crash_install(const char *a, const char *b, const char *c, const char *d)

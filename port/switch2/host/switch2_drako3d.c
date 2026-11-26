@@ -4,7 +4,8 @@
 /* DkInvalidateFlags_Image | DkInvalidateFlags_L2Cache.  Keep this helper
    independent of the console headers so the ordering policy is host-testable. */
 #define SWITCH2_DRAKO3D_INVALIDATE_IMAGE (1u << 0)
-#define SWITCH2_DRAKO3D_INVALIDATE_L2_CACHE (1u << 1)
+/* DkInvalidateFlags_L2Cache is bit 4 (1u << 4 == 0x10) in drako3d.h. */
+#define SWITCH2_DRAKO3D_INVALIDATE_L2_CACHE (1u << 4)
 
 bool switch2_drako3d_fence_allows_reuse(uint32_t retired, uint32_t serial)
 {

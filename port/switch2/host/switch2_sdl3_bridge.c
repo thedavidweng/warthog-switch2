@@ -446,7 +446,7 @@ bool SDL_GetGamepadButton(SDL_Gamepad *gamepad, SDL_GamepadButton button)
 SDL_GamepadType SDL_GetGamepadType(SDL_Gamepad *gamepad)
 {
 	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID)
-		return SDL_GAMEPAD_TYPE_STANDARD;
+		return SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO;
 	return (SDL_GamepadType)host_sdl_gamepad_type((unsigned int)(uintptr_t)gamepad);
 }
 

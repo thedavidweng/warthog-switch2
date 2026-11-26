@@ -143,6 +143,9 @@ int clock_nanosleep(clockid_t, int, const struct timespec *, struct timespec *);
 float nextafterf(float, float);
 float sqrtf(float);
 float fabsf(float);
+float ceilf(float);
+float floorf(float);
+float roundf(float);
 #endif
 #include <stdio.h>
 #include <stdlib.h>

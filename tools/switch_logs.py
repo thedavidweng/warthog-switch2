@@ -141,9 +141,11 @@ def switch2_main(argv):
     text = (SWITCH2_LOCAL / "warthog.log").read_text(encoding="utf-8", errors="replace")
     text = text.rsplit("--- launch ---", 1)[-1]
     for line in text.splitlines():
-        if any(key in line.lower() for key in ("firmware:", "applet", "renderer:", "uam2", "build)", "module_base:")):
+        lower = line.lower()
+        if any(key in lower for key in ("firmware:", "applet", "renderer:", "uam2", "build)", "module_base:")) or \
+           lower.startswith(("result:", "module:", "description:", "dkresult:", "message:", "context:")):
             print(line)
-    faults = re.findall(r"FAULT_KIND:\s*(CPU_EXCEPTION|GPU_FAULT)", text)
+    faults = re.findall(r"FAULT_KIND:\s*(CPU_EXCEPTION|GPU_FAULT|DIAG_ABORT|C_ABORT)", text)
     print("outcome:", faults[-1] if faults else
           ("clean exit" if "startup complete; returning" in text else "incomplete"))
     offsets = list(dict.fromkeys(int(value, 16) for value in re.findall(r"warthog\.elf\+0x([0-9a-fA-F]+)", text)))

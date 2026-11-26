@@ -21,29 +21,81 @@ struct mapped_run { uintptr_t va; void *backing; size_t size; };
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void *slice;
 #ifdef __SWITCH2__
+/* Active sub-windows inside [0x40000000, 0xa0000000) when a random thread
+   stack sits in the unused [0x50000000, 0x80000000) gap of the 2 GiB StackRegion. */
+#define SWITCH2_LOW_SUBWINDOW_SIZE  0x10000000ULL /* [0x40000000, 0x50000000): CE cache + 224 MiB heap */
+#define SWITCH2_HIGH_SUBWINDOW_OFF  0x40000000ULL /* 0x80000000 - 0x40000000 */
+#define SWITCH2_HIGH_SUBWINDOW_SIZE 0x20000000ULL /* [0x80000000, 0xa0000000): 512 MiB contiguous */
+#define SWITCH2_STACK_GUARD_MARGIN  0x00100000ULL /* 1 MiB guard around existing mappings */
+
 static VirtmemReservation *reservation;
+static VirtmemReservation *reservation_high;
+static bool split_reservation;
+
+static bool switch2_range_unmapped(u64 start, u64 end, u64 region_start, u64 region_end, u64 guard)
+{
+    MemoryInfo info;
+    u32 page;
+    u64 check_start = start > region_start + guard ? start - guard : region_start;
+    u64 check_end = end + guard <= region_end ? end + guard : region_end;
+
+    if (end < start || start < region_start || end > region_end)
+        return false;
+    for (u64 cursor = check_start; cursor < check_end; )
+    {
+        if (R_FAILED(svcQueryMemory(&info, &page, cursor)) ||
+            info.type != MemType_Unmapped || info.addr > cursor)
+            return false;
+        u64 next = info.addr + info.size;
+        if (next <= cursor)
+            return false;
+        cursor = next;
+    }
+    return true;
+}
 
 static void *switch2_fixed_window(void)
 {
-    u64 stack, size, address, end;
-    MemoryInfo info;
-    u32 page;
+    u64 stack, size, address;
 
     if (R_FAILED(svcGetInfo(&stack, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0)) ||
         R_FAILED(svcGetInfo(&size, InfoType_StackRegionSize, CUR_PROCESS_HANDLE, 0)))
         return NULL;
     address = stack + 0x08000000ULL;
-    end = address + SWITCH2_XBOX_WINDOW_SIZE;
-    if (end < address || end > stack + size)
+    if (switch2_range_unmapped(address, address + SWITCH2_XBOX_WINDOW_SIZE, stack, stack + size, 0))
+        return (void *)(uintptr_t)address;
+    return NULL;
+}
+
+static void *switch2_scan_split_window(bool *out_split)
+{
+    u64 stack, size;
+
+    *out_split = false;
+    if (R_FAILED(svcGetInfo(&stack, InfoType_StackRegionAddress, CUR_PROCESS_HANDLE, 0)) ||
+        R_FAILED(svcGetInfo(&size, InfoType_StackRegionSize, CUR_PROCESS_HANDLE, 0)) ||
+        size < SWITCH2_XBOX_WINDOW_SIZE)
         return NULL;
-    for (u64 cursor = address; cursor < end; cursor = info.addr + info.size)
+    u64 limit = stack + size - SWITCH2_XBOX_WINDOW_SIZE;
+    for (u64 candidate = stack + 0x01000000ULL; candidate <= limit; candidate += 0x01000000ULL)
     {
-        if (R_FAILED(svcQueryMemory(&info, &page, cursor)) ||
-            info.type != MemType_Unmapped || info.addr > cursor ||
-            info.addr + info.size < cursor || info.addr + info.size < end)
-            return NULL;
+        if (switch2_range_unmapped(candidate, candidate + SWITCH2_XBOX_WINDOW_SIZE,
+                stack, stack + size, SWITCH2_STACK_GUARD_MARGIN))
+            return (void *)(uintptr_t)candidate;
     }
-    return (void *)(uintptr_t)address;
+    for (u64 candidate = stack + 0x01000000ULL; candidate <= limit; candidate += 0x00400000ULL)
+    {
+        if (switch2_range_unmapped(candidate, candidate + SWITCH2_LOW_SUBWINDOW_SIZE,
+                stack, stack + size, SWITCH2_STACK_GUARD_MARGIN) &&
+            switch2_range_unmapped(candidate + SWITCH2_HIGH_SUBWINDOW_OFF,
+                candidate + SWITCH2_HIGH_SUBWINDOW_OFF + SWITCH2_HIGH_SUBWINDOW_SIZE,
+                stack, stack + size, SWITCH2_STACK_GUARD_MARGIN))
+        {
+            *out_split = true;
+            return (void *)(uintptr_t)candidate;
+        }
+    }
+    return NULL;
 }
 #endif
 static struct mapped_run *runs, *anon;
@@ -112,13 +164,29 @@ bool switch2_mman_init(void)
     pthread_mutex_lock(&lock);
     if (!slice) {
 #ifdef __SWITCH2__
+        bool split = false;
         virtmemLock();
         void *p = switch2_fixed_window();
         if (!p)
             p = virtmemFindStack(SWITCH2_XBOX_WINDOW_SIZE, 0x10000);
-        reservation = p ? virtmemAddReservation(p, SWITCH2_XBOX_WINDOW_SIZE) : NULL;
+        if (!p)
+            p = switch2_scan_split_window(&split);
+        if (p && !split) {
+            reservation = virtmemAddReservation(p, SWITCH2_XBOX_WINDOW_SIZE);
+            if (reservation) slice = p;
+        } else if (p && split) {
+            reservation = virtmemAddReservation(p, SWITCH2_LOW_SUBWINDOW_SIZE);
+            reservation_high = reservation ? virtmemAddReservation(
+                (char *)p + SWITCH2_HIGH_SUBWINDOW_OFF, SWITCH2_HIGH_SUBWINDOW_SIZE) : NULL;
+            if (reservation && reservation_high) {
+                slice = p;
+                split_reservation = true;
+            } else {
+                if (reservation) { virtmemRemoveReservation(reservation); reservation = NULL; }
+                if (reservation_high) { virtmemRemoveReservation(reservation_high); reservation_high = NULL; }
+            }
+        }
         virtmemUnlock();
-        if (reservation) slice = p;
 #else
         slice = aligned_buffer(SWITCH2_XBOX_WINDOW_SIZE);
 #endif
@@ -140,6 +208,15 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
     uintptr_t start = (uintptr_t)addr, base = (uintptr_t)slice;
     if (addr && start >= base && start - base < SWITCH2_XBOX_WINDOW_SIZE &&
         size <= SWITCH2_XBOX_WINDOW_SIZE - (start - base) && !(start % SWITCH2_PAGE_SIZE)) {
+#ifdef __SWITCH2__
+        if (split_reservation &&
+            !((start - base + size <= SWITCH2_LOW_SUBWINDOW_SIZE) ||
+              (start - base >= SWITCH2_HIGH_SUBWINDOW_OFF))) {
+            pthread_mutex_unlock(&lock);
+            errno = ENOMEM;
+            return MAP_FAILED;
+        }
+#endif
         size_t first = (start - base) / SWITCH2_PAGE_SIZE, end = first + size / SWITCH2_PAGE_SIZE;
         size_t original_count = run_count;
         for (size_t i = first; i < end;) {
@@ -203,12 +280,17 @@ void switch2_mman_shutdown(void)
     memset(pages, 0, sizeof(pages));
     if (slice) {
 #ifdef __SWITCH2__
-        virtmemLock(); virtmemRemoveReservation(reservation); virtmemUnlock();
-        reservation = NULL;
+        virtmemLock();
+        if (reservation_high) { virtmemRemoveReservation(reservation_high); reservation_high = NULL; }
+        if (reservation) { virtmemRemoveReservation(reservation); reservation = NULL; }
+        virtmemUnlock();
 #else
         free(slice);
 #endif
     }
+#ifdef __SWITCH2__
+    split_reservation = false;
+#endif
     slice = NULL; xbox_address_space_base = 0;
     pthread_mutex_unlock(&lock);
 }

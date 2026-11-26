@@ -319,6 +319,9 @@ int host_sdl_gl_set_swap_interval(int interval)
 	if (setting && *setting)
 		interval = atoi(setting);
 	swap_interval = interval;
+#ifdef __SWITCH2__
+	nx2DisplayApply(interval);
+#endif
 	if (host_renderer_deko3d)
 		return 1;
 	return SDL_GL_SetSwapInterval(interval) == 0;
@@ -623,10 +626,15 @@ int host_sdl_gl_swap_window(uint32_t window)
 	if ((void *)object == (void *)&standin_window)
 	{
 		/* until deko3d presents (and its swapchain waits for the display),
-		frames are held to the display's 60 Hz here, as the swap's vsync
+		frames are held to the display's granted rate here, as the swap's vsync
 		holds them over Mesa */
 		static uint64_t next;
+#ifdef __SWITCH2__
+		int hz = nx2DisplayRefreshRate();
+		uint64_t now = armTicksToNs(armGetSystemTick()), interval = 1000000000ull / (uint64_t)(hz > 0 ? hz : 60);
+#else
 		uint64_t now = armTicksToNs(armGetSystemTick()), interval = 1000000000ull / 60;
+#endif
 
 		if (swap_interval > 0 && !host_dk_presenting && next > now)
 		{
@@ -897,8 +905,21 @@ int host_sdl_gamepad_type(uint32_t gamepad)
 	case SDL_CONTROLLER_TYPE_PS3: kind = _host_gamepad_ps3; break;
 	case SDL_CONTROLLER_TYPE_PS4: kind = _host_gamepad_ps4; break;
 	case SDL_CONTROLLER_TYPE_PS5: kind = _host_gamepad_ps5; break;
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO: kind = _host_gamepad_switch_pro; break;
-	default: kind = _host_gamepad_xbox360; break;
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+#ifdef SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+#endif
+		kind = _host_gamepad_switch_pro;
+		break;
+	default:
+#ifdef __SWITCH2__
+		kind = _host_gamepad_switch_pro;
+#else
+		kind = _host_gamepad_xbox360;
+#endif
+		break;
 	}
 	return host_sdl3_gamepad_type(kind);
 }

@@ -47,4 +47,7 @@ void warthog_log_sync(void);
 /* Syncs and closes. Safe to call when nothing was opened. */
 void warthog_log_close(void);
 
+/* Switches INFO buffering once steady-state frame presentation begins. */
+void warthog_log_set_presenting(bool presenting);
+
 void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message);

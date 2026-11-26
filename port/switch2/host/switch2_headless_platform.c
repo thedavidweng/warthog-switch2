@@ -127,10 +127,12 @@ void platform_show_message(const char *title, const char *message)
 }
 #endif
 
+#ifndef HALO_GAME_BROWSER
 void platform_open_url(const char *url)
 {
 	(void)url;
 }
+#endif
 
 #ifndef HALO_SWITCH2_GRAPHICAL
 void platform_request_quit(void)
@@ -610,13 +612,121 @@ extern void physical_memory_allocate(void), cache_files_initialize(void), cache_
 extern void scenario_tags_load(void), main_loop(void), real_math_initialize(void);
 uintptr_t warthog_engine_symbol_anchor(void) { return (uintptr_t)&physical_memory_allocate ^ (uintptr_t)&cache_files_initialize ^ (uintptr_t)&cache_file_header_verify ^ (uintptr_t)&scenario_tags_load ^ (uintptr_t)&main_loop ^ (uintptr_t)&real_math_initialize ^ (uintptr_t)&xbox_address_space_base; }
 
-static volatile unsigned int mw_serial = 1;
-void memory_watch_initialize(void) {}
-void memory_watch_protect(unsigned long address, unsigned long size) { (void)address; (void)size; }
-unsigned long memory_watch_generation(unsigned long address, unsigned long size) { (void)address; (void)size; return mw_serial; }
-unsigned long memory_watch_serial(void) { return mw_serial; }
-void memory_watch_prepare_write(void *address, unsigned long size) { (void)address; (void)size; ++mw_serial; }
-void memory_watch_forget(void *address, unsigned long size) { (void)address; (void)size; ++mw_serial; }
+#define SWITCH2_WATCH_PAGE_SIZE ((uint64_t)0x1000)
+#define SWITCH2_WATCH_PAGE_COUNT (PLATFORM_CONTIGUOUS_MAXIMUM / SWITCH2_WATCH_PAGE_SIZE)
+
+static uint8_t mw_page_protected[SWITCH2_WATCH_PAGE_COUNT];
+static uint32_t mw_page_generation[SWITCH2_WATCH_PAGE_COUNT];
+static uint32_t mw_current_generation = 1;
+static int mw_active = 0;
+
+static int mw_clip_xbox_range(uint64_t begin, uint64_t size, size_t *first_out, size_t *last_out)
+{
+	uint64_t window_begin = (uint64_t)PLATFORM_CONTIGUOUS_BASE;
+	uint64_t window_size = (uint64_t)PLATFORM_CONTIGUOUS_SIZE;
+	uint64_t window_end, start, end;
+	size_t last;
+
+	if (window_size > (uint64_t)PLATFORM_CONTIGUOUS_MAXIMUM)
+		window_size = (uint64_t)PLATFORM_CONTIGUOUS_MAXIMUM;
+	window_end = window_begin + window_size;
+	if (!size || begin >= window_end)
+		return 0;
+	end = (size <= window_end - begin) ? (begin + size) : window_end;
+	if (end <= window_begin)
+		return 0;
+	start = begin < window_begin ? window_begin : begin;
+	*first_out = (size_t)((start - window_begin) / SWITCH2_WATCH_PAGE_SIZE);
+	last = (size_t)((end - 1 - window_begin) / SWITCH2_WATCH_PAGE_SIZE);
+	if (last >= SWITCH2_WATCH_PAGE_COUNT)
+		last = SWITCH2_WATCH_PAGE_COUNT - 1;
+	*last_out = last;
+	return 1;
+}
+
+static int mw_clip_host_pointer(const void *address, uint64_t size, size_t *first_out, size_t *last_out)
+{
+	uintptr_t ptr = (uintptr_t)address;
+	uintptr_t base = (uintptr_t)XBOX_ADDRESS_SPACE_BASE;
+
+	if (!size || ptr < base)
+		return 0;
+	return mw_clip_xbox_range((uint64_t)(ptr - base), size, first_out, last_out);
+}
+
+void memory_watch_initialize(void)
+{
+	__atomic_store_n(&mw_active, 1, __ATOMIC_RELEASE);
+}
+
+void memory_watch_protect(unsigned long address, unsigned long size)
+{
+	size_t first, last, page;
+
+	if (!__atomic_load_n(&mw_active, __ATOMIC_ACQUIRE))
+		return;
+	if (!mw_clip_xbox_range((uint64_t)address, (uint64_t)size, &first, &last))
+		return;
+	for (page = first; page <= last; page++)
+		__atomic_store_n(&mw_page_protected[page], 1, __ATOMIC_RELEASE);
+}
+
+unsigned long memory_watch_generation(unsigned long address, unsigned long size)
+{
+	size_t first, last, page;
+	uint32_t newest = 0;
+
+	if (!mw_clip_xbox_range((uint64_t)address, (uint64_t)size, &first, &last))
+		return 0;
+	for (page = first; page <= last; page++)
+	{
+		uint32_t gen = __atomic_load_n(&mw_page_generation[page], __ATOMIC_ACQUIRE);
+
+		if (gen > newest)
+			newest = gen;
+	}
+	return (unsigned long)newest;
+}
+
+unsigned long memory_watch_serial(void)
+{
+	return (unsigned long)__atomic_load_n(&mw_current_generation, __ATOMIC_ACQUIRE);
+}
+
+void memory_watch_prepare_write(void *address, unsigned long size)
+{
+	size_t first, last, page;
+
+	if (!__atomic_load_n(&mw_active, __ATOMIC_ACQUIRE))
+		return;
+	if (!mw_clip_host_pointer(address, (uint64_t)size, &first, &last))
+		return;
+	for (page = first; page <= last; page++)
+	{
+		if (__atomic_load_n(&mw_page_protected[page], __ATOMIC_ACQUIRE))
+		{
+			uint32_t gen = __atomic_add_fetch(&mw_current_generation, 1, __ATOMIC_ACQ_REL);
+
+			__atomic_store_n(&mw_page_generation[page], gen, __ATOMIC_RELEASE);
+			__atomic_store_n(&mw_page_protected[page], 0, __ATOMIC_RELEASE);
+		}
+	}
+}
+
+void memory_watch_forget(void *address, unsigned long size)
+{
+	size_t first, last, page;
+	uint32_t gen;
+
+	if (!mw_clip_host_pointer(address, (uint64_t)size, &first, &last))
+		return;
+	gen = __atomic_add_fetch(&mw_current_generation, 1, __ATOMIC_ACQ_REL);
+	for (page = first; page <= last; page++)
+	{
+		__atomic_store_n(&mw_page_protected[page], 0, __ATOMIC_RELEASE);
+		__atomic_store_n(&mw_page_generation[page], gen, __ATOMIC_RELEASE);
+	}
+}
 
 #ifndef HALO_SWITCH2_GRAPHICAL
 unsigned char halo_screen_fast_warp(void) { return 0; }

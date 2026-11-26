@@ -58,6 +58,10 @@ give.
 #include <string.h>
 
 #define FRAMES 3
+#ifdef __SWITCH2__
+_Static_assert(DkInvalidateFlags_Image == (1u << 0), "switch2_drako3d image invalidate flag mismatch");
+_Static_assert(DkInvalidateFlags_L2Cache == (1u << 4), "switch2_drako3d L2 cache invalidate flag mismatch");
+#endif
 /* the swapchain's images: three, so a frame that misses the display's
 refresh starts the next one rather than waiting for the refresh after (a
 17 ms frame cost 33 with two; 10.8% of the game thread in a match was the
@@ -116,10 +120,14 @@ of memory: each at an offset aligned as deko3d wants uniform buffers. Their
 contents are written by the command stream (dkCmdBufPushConstants), in order
 with the draws that read them, so one copy of each does for every frame in
 flight. */
+#define UNIFORM_ALIGN(n) (((uint32_t)(n) + DK_UNIFORM_BUF_ALIGNMENT - 1) & ~(uint32_t)(DK_UNIFORM_BUF_ALIGNMENT - 1))
+#define UNIFORM_VERTEX_CONSTANTS_SIZE UNIFORM_ALIGN(sizeof(struct dk_vertex_constants))
+#define UNIFORM_VERTEX_PARAMETERS_SIZE UNIFORM_ALIGN(sizeof(struct dk_vertex_parameters))
+#define UNIFORM_PIXEL_PARAMETERS_SIZE UNIFORM_ALIGN(sizeof(struct dk_pixel_parameters))
 #define UNIFORM_VERTEX_CONSTANTS 0x000
-#define UNIFORM_VERTEX_PARAMETERS 0xc00
-#define UNIFORM_PIXEL_PARAMETERS 0xd00
-#define UNIFORM_MEMORY_SIZE 0x1000
+#define UNIFORM_VERTEX_PARAMETERS (UNIFORM_VERTEX_CONSTANTS + UNIFORM_VERTEX_CONSTANTS_SIZE)
+#define UNIFORM_PIXEL_PARAMETERS (UNIFORM_VERTEX_PARAMETERS + UNIFORM_VERTEX_PARAMETERS_SIZE)
+#define UNIFORM_MEMORY_SIZE ((UNIFORM_PIXEL_PARAMETERS + UNIFORM_PIXEL_PARAMETERS_SIZE + DK_MEMBLOCK_ALIGNMENT - 1) & ~(uint32_t)(DK_MEMBLOCK_ALIGNMENT - 1))
 
 int host_dk_presenting;
 
@@ -213,6 +221,7 @@ static struct
 	/* the window's chunks, in commit order */
 	struct window_chunk window_chunks[WINDOW_CHUNKS];
 	int window_chunk_count;
+	int window_chunks_tried;
 	/* deko3d ends the program on a memory block it cannot make (DEKO3D.md),
 	so each chunk is tried as the probe tries it first, into a private
 	address space made for the asking */
@@ -260,6 +269,11 @@ static struct
 	struct dk_draw_state state;
 	int state_valid;
 	int state_dirty;
+	int viewport_dirty;
+	int scissor_dirty;
+	DkViewport last_viewport;
+	DkScissor last_scissor;
+	uint32_t upload_rollovers;
 	uint32_t vertex_shader, pixel_shader;
 	int shaders_dirty;
 	struct dk_vertex_format format;
@@ -294,12 +308,24 @@ static struct
 
 #ifdef __SWITCH2__
 void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message);
+void warthog_log_set_presenting(bool presenting);
 #endif
 static void debug_callback(void *user, const char *context, DkResult result, const char *message)
 {
 	(void)user;
 #ifdef __SWITCH2__
 	warthog_dk_debug_callback(user, context, result, message);
+	if (result == DkResult_Success)
+	{
+		static unsigned nonfatal_said;
+		if (nonfatal_said < 8)
+		{
+			nonfatal_said++;
+			host_logf(HOST_LOG_WARN, "deko3d: %s: result %d: %s", context ? context : "?", (int)result,
+				message ? message : "");
+		}
+		return;
+	}
 #endif
 	host_logf(HOST_LOG_ERROR, "deko3d: %s: result %d: %s", context ? context : "?", (int)result,
 		message ? message : "");
@@ -896,6 +922,7 @@ static void command_memory_begin(void)
 	dk.command_pieces = 0;
 	dk.command_rolled_bytes = 0;
 	dk.command_memory_low = 0;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	command_piece_add();
 #ifdef __SWITCH2__
 	/* Ampere retains descriptor cache entries across command lists. */
@@ -999,9 +1026,16 @@ static struct target *target_get(const struct dk_surface *surface)
 			(unsigned)surface->data);
 		return NULL;
 	}
+#ifdef __SWITCH2__
+	/* Ampere / Drako3D MemBlock registers memory without Maxwell CBC compression tags. */
+	layout_make(&layout, surface->kind == DK_SURFACE_DEPTH ? DkImageFormat_Z24S8 : DkImageFormat_RGBA8_Unorm,
+		DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine,
+		SURFACE_PIXEL_WIDTH(surface), SURFACE_PIXEL_HEIGHT(surface));
+#else
 	layout_make(&layout, surface->kind == DK_SURFACE_DEPTH ? DkImageFormat_Z24S8 : DkImageFormat_RGBA8_Unorm,
 		DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine | (host_dk_no_compression ? 0 : DkImageFlags_HwCompression),
 		SURFACE_PIXEL_WIDTH(surface), SURFACE_PIXEL_HEIGHT(surface));
+#endif
 	if (!image_memory(&layout, &block, &offset))
 	{
 		host_logf(HOST_LOG_ERROR, "deko3d: no image memory for the %ux%u target at %08x",
@@ -1220,6 +1254,7 @@ static void frame_begin(void)
 	dk.color = dk.depth = NULL;
 	/* the queue is not trusted to be as the draws were told: put it back */
 	dk.state_dirty = dk.shaders_dirty = dk.format_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	dk.uniforms_bound = 0;
 }
 
@@ -1229,6 +1264,26 @@ region. A stall, but a rare one, and the alternative ends the program. The
 upload and staging slices go on as they were: what the GPU has read of them is
 read by now, and what it has not is still ahead of the frame's own offsets. */
 static void commands_submit_partial(void);
+static void textures_rollover_reset(void);
+
+static void rebind_targets_and_dirty_state(void)
+{
+	if (dk.color || dk.depth)
+	{
+		DkImageView color_view, depth_view;
+		DkImageView const *colors[1] = { &color_view };
+
+		if (dk.color)
+			dkImageViewDefaults(&color_view, &dk.color->image);
+		if (dk.depth)
+			dkImageViewDefaults(&depth_view, &dk.depth->image);
+		dkCmdBufBindRenderTargets(dk.commands, colors, dk.color ? 1 : 0, dk.depth ? &depth_view : NULL);
+	}
+	dk.state_dirty = dk.shaders_dirty = dk.format_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
+	dk.uniforms_bound = 0;
+	textures_rollover_reset();
+}
 
 static void command_memory_roll(void)
 {
@@ -1252,7 +1307,40 @@ static void command_memory_roll(void)
 		host_logf(HOST_LOG_WARN, "deko3d: a frame filled its %u bytes of command memory; it is submitted and "
 			"waited for, and the frame goes on from the start", (unsigned)COMMAND_MEMORY_SIZE);
 	command_memory_begin();
+	rebind_targets_and_dirty_state();
 	dk.command_rolled_bytes = used;
+	profile.frame.rollovers++;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_rollover();
+#endif
+	profile_mark(trace.pass);
+}
+
+/* Submit what was recorded with the current upload slice, wait for the GPU
+to finish reading it, and restart the upload slice cleanly so draws never skip. */
+static void upload_memory_roll(void)
+{
+	if (dk.recorded)
+		commands_submit_partial();
+	pthread_mutex_lock(&dk_lock);
+	if (queue_faulted())
+		fences_forget();
+	if (dk.fence_pending[dk.frame])
+	{
+		fence_wait_said(dk.frame, "an upload memory rollover");
+		dk.fence_pending[dk.frame] = 0;
+		if (dk.fence_serial[dk.frame] > dk.serial_retired)
+			dk.serial_retired = dk.fence_serial[dk.frame];
+	}
+	pthread_mutex_unlock(&dk_lock);
+	if (!dk.upload_rollovers++)
+		host_logf(HOST_LOG_WARN, "deko3d: a frame filled its %u bytes of upload memory; submitting and "
+			"rolling upload slice", (unsigned)UPLOAD_SLICE_SIZE);
+	dk.upload_used = 0;
+	dk.upload_generation++;
+	dk.constants_gpu = 0;
+	command_memory_begin();
+	rebind_targets_and_dirty_state();
 	profile.frame.rollovers++;
 #ifdef __SWITCH2__
 	switch2_perf_renderer_rollover();
@@ -1273,8 +1361,10 @@ make one. */
 static void chunk_block_make(struct window_chunk *chunk)
 {
 #ifdef __SWITCH2__
-	/* Backing runs can be freed by munmap while the GPU is using them.
-	   Until their lifetime is coordinated with GPU fences, upload instead. */
+	/* Switch 2 window chunks are mapped via svcMapMemory, which borrows the
+	   heap backing pages (stripping CPU permission on the source heap) while
+	   dkMemBlockCreate aborts via RaiseError if GPU registration refuses an
+	   alias mapping. Upload through dk.upload_memory instead. */
 	(void)chunk;
 #else
 	NvMap map;
@@ -1349,16 +1439,15 @@ void host_dk_window_chunk_committed(uint64_t address, uint64_t size)
 the game thread. A chunk the console refuses is tried no more. */
 static void chunks_map(void)
 {
-	static int tried;
 	int count, index;
 
 	pthread_mutex_lock(&dk_lock);
 	count = dk.window_chunk_count;
 	pthread_mutex_unlock(&dk_lock);
 	/* (entries below count are not touched by other threads again) */
-	for (index = tried; index < count; index++)
+	for (index = dk.window_chunks_tried; index < count; index++)
 		chunk_block_make(&dk.window_chunks[index]);
-	tried = count;
+	dk.window_chunks_tried = count;
 }
 
 /* The GPU address of [address, address + size) of the window, for a draw
@@ -1631,6 +1720,9 @@ static void swapchain_make(void)
 	}
 	dkSwapchainMakerDefaults(&swapchain_maker, dk.device, nwindowGetDefault(), screen_images, SCREEN_IMAGES);
 	dk.swapchain = dkSwapchainCreate(&swapchain_maker);
+#ifdef __SWITCH2__
+	nx2DisplayReapply();
+#endif
 }
 
 /* the swapchain made again at output_height, once the GPU has finished with
@@ -1831,6 +1923,7 @@ static void targets_bind(const struct dk_command_targets *command)
 	}
 	/* (the draws' viewport and scissor go back at the next draw) */
 	dk.state_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 }
 
 static void clear(const struct dk_command_clear *command)
@@ -1881,6 +1974,7 @@ static void clear(const struct dk_command_clear *command)
 	window, and the viewport is set to it as the scissor is; the next draw
 	puts both back (state_dirty). */
 	dk.state_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	for (index = 0; index < command->rectangle_count; index++)
 	{
 		const uint32_t *rectangle = command->rectangles[index];
@@ -2001,6 +2095,7 @@ static void present(const struct dk_command_present *command)
 	dkCmdBufBindRenderTargets(dk.commands, screen_views, 1, NULL);
 	dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
 	dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	dkCmdBufClearColorFloat(dk.commands, 0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
 	if (back_buffer)
 	{
@@ -2050,7 +2145,11 @@ static void present(const struct dk_command_present *command)
 		to.height = height;
 		to.depth = 1;
 		dkImageViewDefaults(&source, &back_buffer->image);
+#ifdef __SWITCH2__
+		barrier(DkBarrier_Fragments, switch2_drako3d_copy_invalidate_flags());
+#else
 		barrier(DkBarrier_Fragments, 0);
+#endif
 		if (command->screenshot && readback_make(source_width, source_height))
 		{
 			DkImageView readback;
@@ -2083,6 +2182,9 @@ static void present(const struct dk_command_present *command)
 			dkCmdBufBlitImage(dk.commands, &source, &from, &guest_view,
 				&guest_to, DkBlitFlag_FilterLinear, 0);
 		}
+		/* Drako3D's postSubmitFlush invalidates caches without a full barrier;
+		   ensure the 2D blit finishes reading back_buffer before next frame's 3D clear. */
+		barrier(DkBarrier_Full, 0);
 #endif
 	}
 	command_done(event);
@@ -2130,7 +2232,15 @@ static void present(const struct dk_command_present *command)
 	slow.presents++;
 	host_dk_presenting = 1;
 	if (++dk.frames_presented == 1)
+	{
+#ifdef __SWITCH2__
+		host_logf(HOST_LOG_INFO, "deko3d: first frame presented (%ux%u @ %d Hz)", (unsigned)dk.screen_width,
+			(unsigned)dk.screen_height, nx2DisplayRefreshRate());
+		warthog_log_set_presenting(true);
+#else
 		host_logf(HOST_LOG_INFO, "deko3d: first frame presented");
+#endif
+	}
 	/* (the largest frame's command memory, to a piece, for choosing its size
 	from what maps take) */
 	if (dk.frames_presented % 60 == 0)
@@ -2257,6 +2367,7 @@ static struct
 	uint32_t stage_sampler[4];
 	int stages_dirty;
 	int descriptors_bound;
+	int descriptors_dirty;
 	/* texels were written since the last barrier, or draws were recorded
 	since the last one (a texture rewritten in place waits for them) */
 	int written_unfenced;
@@ -2697,8 +2808,8 @@ static int texture_make(struct texture *texture, const struct dk_command_texture
 	}
 	dkImageDescriptorInitialize(&descriptors[texture->slot], &view, false, false);
 #ifdef __SWITCH2__
-	/* Ampere retains descriptors after the CPU rewrites them. */
-	barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+	/* Batch descriptor cache invalidations until draws fence or apply textures. */
+	tex.descriptors_dirty = 1;
 #endif
 	texture->swizzle = command->swizzle;
 	texture->kind = command->kind;
@@ -2725,7 +2836,12 @@ static void textures_fence(int before_writes)
 	}
 	if (!tex.written_unfenced)
 		return;
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors | switch2_drako3d_copy_invalidate_flags());
+	tex.descriptors_dirty = 0;
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
+#endif
 	tex.written_unfenced = 0;
 	tex.draws_unfenced = 0;
 }
@@ -3295,8 +3411,8 @@ static uint32_t sampler_slot(const struct dk_sampler *sampler)
 	tex.samplers[index] = *sampler;
 	dkSamplerDescriptorInitialize(&descriptors[index], &made);
 #ifdef __SWITCH2__
-	/* Ampere retains descriptors after the CPU rewrites them. */
-	barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+	/* Batch descriptor cache invalidations until draws fence or apply textures. */
+	tex.descriptors_dirty = 1;
 #endif
 	return index;
 }
@@ -3556,7 +3672,11 @@ static struct composite *composite_sampled(uint32_t data, uint32_t levels)
 	/* the targets' draws done, then each level copied (the 2D engine), the
 	ones not drawn halved from the one above, and the copies done before
 	the draws that sample them */
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Fragments, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Fragments, 0);
+#endif
 	for (level = 0; level < levels; level++)
 	{
 		DkImageView source, destination;
@@ -3733,12 +3853,20 @@ static void picture_draw(const struct dk_command_picture *command)
 	dkImageViewDefaults(&from_view, &picture.image);
 	copy.addr = source;
 	dkCmdBufCopyBufferToImage(dk.commands, &copy, &from_view, &from, 0);
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+#endif
 	dkImageViewDefaults(&to_view, &destination->image);
 	to.width = SURFACE_PIXEL_WIDTH(&destination->surface);
 	to.height = SURFACE_PIXEL_HEIGHT(&destination->surface);
 	dkCmdBufBlitImage(dk.commands, &from_view, &from, &to_view, &to, DkBlitFlag_FilterLinear, 0);
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+#endif
 	targets_sampled_forget();
 	tex.stages_dirty = 1;
 	/* (the latest image at its data, which a stage samples: target_sampled) */
@@ -3816,6 +3944,13 @@ static int textures_apply(void)
 	dummy_make();
 	/* what was written since the last barrier is made visible to this draw */
 	textures_fence(0);
+#ifdef __SWITCH2__
+	if (tex.descriptors_dirty)
+	{
+		barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+		tex.descriptors_dirty = 0;
+	}
+#endif
 	if (!tex.stages_dirty)
 		return 1;
 	for (stage = 0; stage < 4; stage++)
@@ -3861,10 +3996,18 @@ static int textures_apply(void)
 /* the start of a frame: the staging slice is free again behind the frame's
 fence, the descriptor sets are bound anew, and what the GPU has finished with
 is let go */
+static void textures_rollover_reset(void)
+{
+	tex.descriptors_bound = 0;
+	tex.stages_dirty = 1;
+	tex.descriptors_dirty = 0;
+}
+
 static void textures_frame_begin(void)
 {
 	tex.staging_used = 0;
 	tex.descriptors_bound = 0;
+	tex.descriptors_dirty = 0;
 	if (dk.ready)
 		releases_collect();
 }
@@ -4041,7 +4184,7 @@ static void constants_receive(const struct dk_command_constants *command)
 {
 	if (!dk.uniform_memory || command->first >= 192 || command->count > 192 - command->first)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, sizeof(struct dk_vertex_constants),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, UNIFORM_VERTEX_CONSTANTS_SIZE,
 		command->first * 4 * sizeof(float), command->count * 4 * sizeof(float), command->data);
 }
 
@@ -4049,7 +4192,7 @@ static void vertex_parameters_receive(const struct dk_command_vertex_parameters 
 {
 	if (!dk.uniform_memory)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, sizeof(struct dk_vertex_parameters),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, UNIFORM_VERTEX_PARAMETERS_SIZE,
 		0, sizeof(command->parameters), &command->parameters);
 }
 
@@ -4057,7 +4200,7 @@ static void pixel_parameters_receive(const struct dk_command_pixel_parameters *c
 {
 	if (!dk.uniform_memory)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, sizeof(struct dk_pixel_parameters),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, UNIFORM_PIXEL_PARAMETERS_SIZE,
 		0, sizeof(command->parameters), &command->parameters);
 }
 
@@ -4232,8 +4375,18 @@ static int state_apply(void)
 	/* After the rasterizer state, and on every draw: binding a target left
 	the scissor as the whole target. The window is put back so a triangle the
 	clipper does not take cannot paint the other split-screen pane. */
-	dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
-	dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+	if (dk.viewport_dirty || memcmp(&viewport, &dk.last_viewport, sizeof(viewport)) != 0)
+	{
+		dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
+		dk.last_viewport = viewport;
+		dk.viewport_dirty = 0;
+	}
+	if (dk.scissor_dirty || memcmp(&scissor, &dk.last_scissor, sizeof(scissor)) != 0)
+	{
+		dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+		dk.last_scissor = scissor;
+		dk.scissor_dirty = 0;
+	}
 	return 1;
 }
 
@@ -4246,11 +4399,11 @@ static int shaders_apply(void)
 	if (!dk.uniforms_bound && dk.uniform_memory)
 	{
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Vertex, DK_BINDING_VERTEX_CONSTANTS,
-			dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, sizeof(struct dk_vertex_constants));
+			dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, UNIFORM_VERTEX_CONSTANTS_SIZE);
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Vertex, DK_BINDING_VERTEX_PARAMETERS,
-			dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, sizeof(struct dk_vertex_parameters));
+			dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, UNIFORM_VERTEX_PARAMETERS_SIZE);
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Fragment, DK_BINDING_PIXEL_PARAMETERS,
-			dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, sizeof(struct dk_pixel_parameters));
+			dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, UNIFORM_PIXEL_PARAMETERS_SIZE);
 		dk.uniforms_bound = 1;
 	}
 	if (!dk.shaders_dirty)
@@ -4334,6 +4487,40 @@ static void draw(const struct dk_command_draw *command)
 		event->a[0] |= 1u << 24;
 		draw_problem("what it needs is not in place");
 		return;
+	}
+	if (dk.upload_memory)
+	{
+		uint32_t align_pad = UPLOAD_ALIGNMENT - 1;
+		uint32_t needed = 0;
+		uint32_t next_offset = (dk.upload_used + align_pad) & ~align_pad;
+		uint32_t stream_idx;
+
+		for (stream_idx = 0; stream_idx < streams; stream_idx++)
+		{
+			uint32_t sz = command->inline_bytes ? command->inline_bytes : command->streams[stream_idx][1];
+
+			if (sz > UPLOAD_SLICE_SIZE - needed)
+			{
+				needed = UPLOAD_SLICE_SIZE + 1;
+				break;
+			}
+			needed += (sz + align_pad) & ~align_pad;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && dk.vertex.has_constants &&
+			(dk.constants_generation != dk.upload_generation || !dk.constants_gpu))
+		{
+			uint32_t const_sz = ((uint32_t)sizeof(dk.format.constants) + align_pad) & ~align_pad;
+
+			needed = (const_sz <= UPLOAD_SLICE_SIZE - needed) ? needed + const_sz : UPLOAD_SLICE_SIZE + 1;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && command->index_address)
+		{
+			uint32_t idx_sz = ((uint32_t)(command->count * sizeof(uint16_t)) + align_pad) & ~align_pad;
+
+			needed = (idx_sz <= UPLOAD_SLICE_SIZE - needed) ? needed + idx_sz : UPLOAD_SLICE_SIZE + 1;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && next_offset + needed > UPLOAD_SLICE_SIZE)
+			upload_memory_roll();
 	}
 	if (!state_apply())
 	{
@@ -4841,7 +5028,11 @@ static void *render_watchdog(void *unused)
 static void *render_thread(void *unused)
 {
 	(void)unused;
+#ifdef __SWITCH2__
+	host_thread_place_on_render_core();
+#else
 	host_thread_place_on_helper_core();
+#endif
 	render_handle = threadGetCurHandle();
 	{
 #ifdef __SWITCH2__
@@ -4990,6 +5181,8 @@ void host_dk_shutdown(void)
 	free(trace.events);
 	for (i = 0; i < PICTURE_SLOTS; i++) free(picture.slots[i].data);
 	for (i = 0; i < RENDER_QUEUE; i++) free(render_queue.streams[i].data);
+	host_dk_presenting = 0;
+	warthog_log_set_presenting(false);
 	memset(&dk, 0, sizeof(dk));
 }
 #endif

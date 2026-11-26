@@ -13,8 +13,81 @@ follows xbox_textures.c, so locks and uploads agree.
 
 #include "xgpu.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef HALO_64BIT
+#define D3D8_INDEX_BUFFER_TRACK_LIMIT 64
+
+struct d3d8_index_buffer_range
+{
+	uintptr_t start;
+	uintptr_t end;
+};
+
+static pthread_mutex_t index_buffer_track_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct d3d8_index_buffer_range index_buffer_ranges[D3D8_INDEX_BUFFER_TRACK_LIMIT];
+static unsigned index_buffer_range_count;
+
+static void index_buffer_track_add(const void *address, size_t size)
+{
+	uintptr_t start = (uintptr_t)address;
+	uintptr_t end = start + (size ? size : 1);
+
+	if (!address)
+		return;
+	pthread_mutex_lock(&index_buffer_track_lock);
+	if (index_buffer_range_count < D3D8_INDEX_BUFFER_TRACK_LIMIT)
+	{
+		index_buffer_ranges[index_buffer_range_count].start = start;
+		index_buffer_ranges[index_buffer_range_count].end = end;
+		index_buffer_range_count++;
+	}
+	pthread_mutex_unlock(&index_buffer_track_lock);
+}
+
+static void index_buffer_track_remove(const void *address)
+{
+	uintptr_t start = (uintptr_t)address;
+	unsigned i;
+
+	if (!address)
+		return;
+	pthread_mutex_lock(&index_buffer_track_lock);
+	for (i = 0; i < index_buffer_range_count; i++)
+	{
+		if (index_buffer_ranges[i].start == start)
+		{
+			index_buffer_ranges[i] = index_buffer_ranges[--index_buffer_range_count];
+			break;
+		}
+	}
+	pthread_mutex_unlock(&index_buffer_track_lock);
+}
+
+BOOL d3d8_index_buffer_contains(const void *address, size_t size)
+{
+	uintptr_t start = (uintptr_t)address;
+	uintptr_t end = start + (size ? size : 1);
+	unsigned i;
+	BOOL found = FALSE;
+
+	if (!address)
+		return FALSE;
+	pthread_mutex_lock(&index_buffer_track_lock);
+	for (i = 0; i < index_buffer_range_count; i++)
+	{
+		if (end > index_buffer_ranges[i].start && start < index_buffer_ranges[i].end)
+		{
+			found = TRUE;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&index_buffer_track_lock);
+	return found;
+}
+#endif
 
 static void *resource_data(DWORD data)
 {
@@ -133,7 +206,12 @@ ULONG WINAPI D3DResource_Release(D3DResource *resource)
 #endif
 		if ((fields[0] & D3DCOMMON_TYPE_MASK) == D3DCOMMON_TYPE_INDEXBUFFER)
 #ifdef HALO_64BIT
-			platform_contiguous_free(xbox_pointer(fields[1]));
+		{
+			void *memory = xbox_pointer(fields[1]);
+
+			index_buffer_track_remove(memory);
+			platform_contiguous_free(memory);
+		}
 #else
 			free((void *)fields[1]);
 #endif
@@ -653,6 +731,7 @@ HRESULT WINAPI D3DDevice_CreateIndexBuffer(UINT length, DWORD usage, D3DFORMAT f
 	}
 	buffer->Common = D3DCOMMON_TYPE_INDEXBUFFER | D3DCOMMON_D3DCREATED | 1;
 #ifdef HALO_64BIT
+	index_buffer_track_add(memory, length ? length : 1);
 	buffer->Data = xbox_address(memory);
 #else
 	buffer->Data = (DWORD)memory;

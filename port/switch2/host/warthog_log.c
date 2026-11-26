@@ -30,8 +30,39 @@ SPDX-License-Identifier: GPL-3.0-or-later
 /* the console's tick rate: 19.2 MHz, which is what svcGetSystemTick counts */
 #define TICKS_PER_SECOND 19200000ull
 
+/* kaiHEN attaches to the process as a debugger (InfoType_DebuggerAttached == 1),
+   which makes libounce's __libnx_exception_entry skip __libnx_exception_handler
+   unless __nx_exception_ignoredebug is non-zero. */
+u32 __nx_exception_ignoredebug = 1;
+
+/* Override libounce's 1 KiB weak exception stack so fault handlers never
+   overflow into __nx_exceptiondump while formatting and syncing crash records. */
+_Alignas(16) u8 __nx_exception_stack[0x8000];
+u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
+
 static FILE *log_file;
+static int log_fd = -1;
+static volatile int log_presenting;
+static volatile int fault_logged;
 extern const u8 __start__[];
+
+static int fault_open_fd(bool *opened)
+{
+	if (log_fd >= 0)
+	{
+		*opened = false;
+		return log_fd;
+	}
+	*opened = true;
+	return open(WARTHOG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
+}
+
+static void fault_finish_fd(int fd, bool opened)
+{
+	fsync(fd);
+	if (opened)
+		close(fd);
+}
 
 /* Exception records avoid stdio and allocation, including integer formatting. */
 static void raw_text(int fd, const char *text)
@@ -98,8 +129,11 @@ static void raw_frames(int fd, u64 fp, unsigned number)
 
 void __libnx_exception_handler(ThreadExceptionDump *ctx)
 {
-	int fd = open(WARTHOG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
+	bool opened = false;
+	fault_logged = 1;
+	int fd = fault_open_fd(&opened);
 	if (fd < 0) return;
+	if (!log_file) raw_text(fd, "--- launch ---\n");
 	raw_text(fd, "FAULT_KIND: CPU_EXCEPTION\n");
 	raw_field(fd, "error_desc: ", ctx->error_desc);
 	raw_field(fd, "pc: ", ctx->pc.x);
@@ -109,15 +143,18 @@ void __libnx_exception_handler(ThreadExceptionDump *ctx)
 	raw_field(fd, "MODULE_BASE: ", warthog_module_base());
 	raw_frame(fd, 0, ctx->pc.x);
 	raw_frames(fd, ctx->fp.x, 1);
-	fsync(fd);
-	close(fd);
+	fault_finish_fd(fd, opened);
 }
 
 void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message)
 {
+	bool opened = false;
 	(void)user_data;
+	if (result == DkResult_Success)
+		return;
+	fault_logged = 1;
 	warthog_log_sync();
-	int fd = open(WARTHOG_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0666);
+	int fd = fault_open_fd(&opened);
 	if (fd < 0) return;
 	raw_text(fd, "FAULT_KIND: GPU_FAULT\ncontext: ");
 	raw_text(fd, context ? context : "");
@@ -127,8 +164,77 @@ void warthog_dk_debug_callback(void *user_data, const char *context, DkResult re
 	raw_text(fd, "\n");
 	raw_field(fd, "MODULE_BASE: ", warthog_module_base());
 	raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 0);
-	fsync(fd);
-	close(fd);
+	fault_finish_fd(fd, opened);
+}
+
+void NX_NORETURN __real_diagAbortWithResult(Result res);
+void NX_NORETURN __wrap_diagAbortWithResult(Result res);
+void NX_NORETURN __wrap_diagAbortWithResult(Result res)
+{
+	bool opened = false;
+	u64 lr = (u64)(uintptr_t)__builtin_return_address(0);
+	fault_logged = 1;
+	warthog_log_sync();
+	int fd = fault_open_fd(&opened);
+	if (fd >= 0)
+	{
+		raw_text(fd, "FAULT_KIND: DIAG_ABORT\n");
+		raw_field(fd, "result: ", res);
+		raw_field(fd, "module: ", R_MODULE(res));
+		raw_field(fd, "description: ", R_DESCRIPTION(res));
+		raw_field(fd, "lr: ", lr);
+		raw_field(fd, "MODULE_BASE: ", warthog_module_base());
+		raw_frame(fd, 0, lr);
+		raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 1);
+		fault_finish_fd(fd, opened);
+	}
+	__real_diagAbortWithResult(res);
+}
+
+void __real_abort(void) __attribute__((noreturn));
+void __wrap_abort(void) __attribute__((noreturn));
+void __wrap_abort(void)
+{
+	bool opened = false;
+	u64 lr = (u64)(uintptr_t)__builtin_return_address(0);
+	fault_logged = 1;
+	warthog_log_sync();
+	int fd = fault_open_fd(&opened);
+	if (fd >= 0)
+	{
+		raw_text(fd, "FAULT_KIND: C_ABORT\n");
+		raw_field(fd, "lr: ", lr);
+		raw_field(fd, "MODULE_BASE: ", warthog_module_base());
+		raw_frame(fd, 0, lr);
+		raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 1);
+		fault_finish_fd(fd, opened);
+	}
+	__real_abort();
+}
+
+void NX_NORETURN __real_svcBreak(u32 breakReason, uintptr_t address, uintptr_t size);
+void NX_NORETURN __wrap_svcBreak(u32 breakReason, uintptr_t address, uintptr_t size);
+void NX_NORETURN __wrap_svcBreak(u32 breakReason, uintptr_t address, uintptr_t size)
+{
+	if (!fault_logged)
+	{
+		bool opened = false;
+		u64 lr = (u64)(uintptr_t)__builtin_return_address(0);
+		fault_logged = 1;
+		warthog_log_sync();
+		int fd = fault_open_fd(&opened);
+		if (fd >= 0)
+		{
+			raw_text(fd, "FAULT_KIND: DIAG_ABORT\n");
+			raw_field(fd, "result: ", (size >= 4 && address) ? *(const u32 *)address : breakReason);
+			raw_field(fd, "lr: ", lr);
+			raw_field(fd, "MODULE_BASE: ", warthog_module_base());
+			raw_frame(fd, 0, lr);
+			raw_frames(fd, (u64)(uintptr_t)__builtin_frame_address(0), 1);
+			fault_finish_fd(fd, opened);
+		}
+	}
+	__real_svcBreak(breakReason, address, size);
 }
 
 /* made with mkdir rather than fsdev, so the log does not depend on which
@@ -147,7 +253,14 @@ bool warthog_log_open(void)
 {
 	make_directories();
 	log_file = fopen(WARTHOG_LOG_PATH, "a");
+	log_fd = log_file ? fileno(log_file) : -1;
+	log_presenting = 0;
 	return log_file != NULL;
+}
+
+void warthog_log_set_presenting(bool presenting)
+{
+	__atomic_store_n(&log_presenting, presenting ? 1 : 0, __ATOMIC_RELAXED);
 }
 
 static void stamp(char *buffer, size_t size)
@@ -175,7 +288,9 @@ static void write_line(const char *level, const char *format, va_list arguments,
 		fprintf(log_file, "[%s] %-5s ", time_buffer, level);
 		vfprintf(log_file, format, to_file);
 		fputc('\n', log_file);
-		fflush(log_file);
+		if (!__atomic_load_n(&log_presenting, __ATOMIC_RELAXED) ||
+			to_console || !level || strcmp(level, "INFO") != 0)
+			fflush(log_file);
 	}
 	if (to_console)
 	{
@@ -218,6 +333,8 @@ void warthog_log_close(void)
 	if (!log_file)
 		return;
 	warthog_log_sync();
+	log_fd = -1;
+	log_presenting = 0;
 	fclose(log_file);
 	log_file = NULL;
 }

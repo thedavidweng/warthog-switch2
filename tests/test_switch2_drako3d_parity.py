@@ -21,7 +21,7 @@ int main(void) {
         switch2_drako3d_resize_requires_idle(0) ||
         !switch2_drako3d_hud_requires_clean(1) ||
         switch2_drako3d_hud_requires_clean(0) ||
-        switch2_drako3d_copy_invalidate_flags() != 3)
+        switch2_drako3d_copy_invalidate_flags() != 0x11)
         return 1;
     switch2_drako3d_record_upload(&stats, 64);
     switch2_drako3d_record_rollover(&stats);
@@ -74,6 +74,31 @@ int main(void) {
         text = "\n".join(path.read_text(errors="ignore") for path in files if path.is_file())
         self.assertNotIn("glCreateShader", text)
         self.assertNotIn("vkCreateInstance", text)
+    def test_push_constants_ubo_sizes_are_aligned_to_dk_uniform_buf_alignment(self):
+        import re
+
+        build = ROOT / "scripts/switch2/build.sh"
+        subprocess.run([str(build), "ninja", "build/switch2/host/host_dk.c.o"],
+                       cwd=ROOT, check=True, capture_output=True)
+        disasm = subprocess.run(
+            [str(build), "/opt/devkitpro/devkitA64/bin/aarch64-none-elf-objdump", "-dr",
+             "build/switch2/host/host_dk.c.o"],
+            cwd=ROOT, check=True, capture_output=True, text=True,
+        ).stdout
+        ubo_sizes = []
+        last_w2 = None
+        for line in disasm.splitlines():
+            m = re.search(r"\bmov\s+w2,\s*#(0x[0-9a-fA-F]+|\d+)", line)
+            if m:
+                last_w2 = int(m.group(1), 0)
+            if "R_AARCH64_CALL26\tdkCmdBufPushConstants" in line:
+                ubo_sizes.append(last_w2)
+                last_w2 = None
+        self.assertEqual(len(ubo_sizes), 3)
+        for size in ubo_sizes:
+            self.assertIsNotNone(size)
+            self.assertEqual(size % 0x100, 0, f"uboSize {size:#x} is not aligned to DK_UNIFORM_BUF_ALIGNMENT (0x100)")
+        self.assertEqual(sorted(ubo_sizes), [0x100, 0x300, 0xC00])
 
 
 if __name__ == "__main__":

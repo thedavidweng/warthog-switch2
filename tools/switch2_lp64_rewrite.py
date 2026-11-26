@@ -25,6 +25,7 @@ def main():
                   r"__attribute__((\1))", text)
     text = STATIC_INLINE.sub(r"static\1__inline__", text)
     text = STATIC_FORCEINLINE.sub(r"static\1__inline__ __attribute__((always_inline))", text)
+    text = re.sub(r"\bformat\s*\(\s*printf\s*,", "format(__printf__,", text)
     text = f'#line 1 "{args.source.as_posix()}"\n' + text
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.is_file() or read(args.output) != text:

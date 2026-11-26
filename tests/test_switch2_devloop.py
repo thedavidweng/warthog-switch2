@@ -250,6 +250,8 @@ class LogsTest(unittest.TestCase):
     def test_gpu_fault_and_clean_exit_are_distinct(self):
         folder = "/switch/warthog/logs"
         for content, expected in ((b"FAULT_KIND: GPU_FAULT\n", "GPU_FAULT"),
+                                  (b"FAULT_KIND: DIAG_ABORT\nresult: 0x1a80a\n", "DIAG_ABORT"),
+                                  (b"FAULT_KIND: C_ABORT\n", "C_ABORT"),
                                   (b"startup complete; returning to the homebrew menu\n", "clean exit")):
             with self.subTest(expected=expected), MockFtp(
                 {folder + "/warthog.log": b"--- launch ---\n" + content},
@@ -403,6 +405,28 @@ class DeployTest(unittest.TestCase):
             self.assertEqual("configure\nbuild\n", (repo / "build-steps").read_text())
             packaged = repo / "build/switch2/package/switch/warthog/warthog.nro"
             self.assertEqual(packaged.read_bytes(), ftp.files["/switch/warthog/warthog.nro"])
+
+    def test_remote_size_falls_back_to_list_when_ftp_size_returns_zero(self):
+        import switch_deploy
+
+        class FakeFtp:
+            def __init__(self, lines):
+                self._lines = lines
+
+            def size(self, name):
+                return 0
+
+            def retrlines(self, cmd, callback):
+                self.last_cmd = cmd
+                for line in self._lines:
+                    callback(line)
+
+        exact = FakeFtp(["-rw-r--r-- 1 switch switch 1234 Nov 26 01:41 warthog.nro"])
+        self.assertEqual(1234, switch_deploy._remote_size(exact, "warthog.nro", 1234))
+        self.assertEqual("LIST", exact.last_cmd)
+
+        truncated = FakeFtp(["-rw-r--r-- 1 switch switch 500 Nov 26 01:41 warthog.nro"])
+        self.assertEqual(500, switch_deploy._remote_size(truncated, "warthog.nro", 1234))
 
 
 if __name__ == "__main__":

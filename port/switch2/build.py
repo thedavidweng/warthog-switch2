@@ -220,13 +220,12 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                              (portlibs_switch2 / "lib", devkitpro / "portlibs" / "switch" / "lib",
                               libounce / "lib"))
 
-    # A release build differs from a debug build in optimisation and in the
-    # asserts, and in nothing else: both keep .debug_info and .symtab, so a
-    # release's crash is symbolized against the symbols published beside it.
-    optimization = "-O2 -DNDEBUG" if release else "-O0"
+    # Match port/switch and lp64_build: always compile the engine at -O2 so
+    # debug builds remain playable at 60+ FPS while keeping symbols and asserts.
+    optimization = "-O2 -DNDEBUG" if release else "-O2"
     profiling = 0 if release else 1
     code_flags = (f"{CPU_FLAGS} {PLATFORM_DEFINES} -DWARTHOG_DEV_PROFILING={profiling} "
-                  f"-g {optimization} -fno-omit-frame-pointer")
+                  f"-g {optimization} -fno-omit-frame-pointer -fno-strict-aliasing -fno-delete-null-pointer-checks")
 
     # ---------- the build's own header, from UPSTREAM.json
 
@@ -335,14 +334,14 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
 
     engine_build = runpy.run_path(str(PORT_DIR / "engine_build.py"))
     engine_build["fetch_sdl_headers"](BUILD)
-    game_objects = engine_build["engine_objects"](n, port, BUILD, code_flags, includes)
+    game_objects = engine_build["engine_objects"](n, port, BUILD, code_flags, includes, sln)
     game_archive = BUILD / "libwarthog_game.a"
     n.rule(name="switch2_ar",
            command=f"{devkitpro / 'devkitA64/bin/aarch64-none-elf-gcc-ar'} rcs $out @$out.rsp",
            description="SWITCH2 AR $out", rspfile="$out.rsp", rspfile_content="$in_newline")
     n.build(outputs=game_archive, rule="switch2_ar", inputs=game_objects)
     n.build(outputs="switch2-engine-game", rule="phony", inputs=game_archive)
-    platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release)
+    platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release, sln)
     platform_archive = BUILD / "libwarthog_platform.a"
     n.build(outputs=platform_archive, rule="switch2_ar", inputs=platform_objects)
     n.build(outputs="switch2-engine-platform", rule="phony", inputs=platform_archive)
@@ -367,6 +366,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
                  + " ".join(f"-l{library}" for library in libraries)
                  + " -lkaihen -Wl,--wrap=__syscall_thread_create -Wl,--wrap=hidInitializeKeyboard"
                  " -Wl,--wrap=hidInitializeMouse -Wl,--wrap=smGetServiceWrapper"
+                 " -Wl,--wrap=diagAbortWithResult -Wl,--wrap=abort -Wl,--wrap=svcBreak"
                  " -Wl,-u,host_dk_submit -Wl,-u,host_dk_output_height"
                  " -Wl,-u,host_dk_shader_find -Wl,-u,host_dk_compile_glsl"
                  " -Wl,--gc-sections -Wl,--wrap=sdl2_host_SDL_VideoInit"

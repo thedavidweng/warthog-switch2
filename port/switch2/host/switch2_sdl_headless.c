@@ -198,9 +198,16 @@ bool SDL_RenamePath(const char *old_path, const char *new_path)
 #else
 	if (rename(old_path, new_path) != 0)
 	{
-		headless_set_error(strerror(errno));
-		return false;
+		(void)remove(new_path);
+		if (rename(old_path, new_path) != 0)
+		{
+			headless_set_error(strerror(errno));
+			return false;
+		}
 	}
+#ifdef __SWITCH2__
+	host_storage_commit();
+#endif
 #endif
 	return true;
 }

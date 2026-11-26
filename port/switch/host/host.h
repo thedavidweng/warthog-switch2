@@ -221,6 +221,9 @@ void host_run_guest_main(uint32_t boot) __attribute__((noreturn));
 threads that never run guest code (host_dk_shaders.c's compile thread);
 logs "a thread starts on core N" when it does */
 void host_thread_place_on_helper_core(void);
+#ifdef __SWITCH2__
+void host_thread_place_on_render_core(void);
+#endif
 
 /* ---------- the renderer (host_main.c)
 

@@ -75,11 +75,11 @@ case "$command" in
 		run python3 chupathingyce/configure.py --console-port port/switch2 "$@"
 		;;
 	build)
-		run python3 chupathingyce/configure.py --console-port port/switch2
+		run python3 chupathingyce/configure.py --console-port port/switch2 "$@"
 		run ninja switch2
 		;;
 	audit)
-		run python3 tools/switch2_audit.py build/switch2
+		run python3 tools/switch2_audit.py "$@" build/switch2
 		;;
 	*)
 		run "$command" "$@"

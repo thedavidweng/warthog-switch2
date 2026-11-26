@@ -179,8 +179,13 @@ int main(void) { return !warthog_verify_simulation_ticks(); }
         ):
             following = source.split(write, 1)[1].lstrip()
             self.assertTrue(following.startswith("#ifdef __SWITCH2__"))
-            self.assertIn("barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);",
-                          following.split("#endif", 1)[0])
+            guarded = following.split("#endif", 1)[0]
+            self.assertTrue(
+                "tex.descriptors_dirty = 1;" in guarded
+                or "barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);" in guarded
+            )
+        textures_apply = source.split("static int textures_apply(void)", 1)[1].split("static void textures_frame_begin", 1)[0]
+        self.assertIn("barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);", textures_apply)
 
     def test_gpu_fault_records_include_base_and_are_connected(self):
         log = (ROOT / "port/switch2/host/warthog_log.c").read_text()

@@ -7,12 +7,25 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
-from tools.embed_assets import hud_asset_inputs
-from tools.linux_build import EXPAT_SOURCES, ZLIB_SOURCES, ZLIB_DEFINES, updater_defines
+from tools.console_build import console_defines
+from tools.embed_assets import FONT_LIST, PROMPT_ICONS, UI_FONT_FILES, hud_asset_inputs
+try:
+    from tools.embed_assets import PROMPT_FONTS  # noqa: F401
+    PROMPT_FONTS_FLAG = "--prompt-fonts none "
+except ImportError:
+    PROMPT_FONTS_FLAG = ""
+from tools.linux_build import EXPAT_SOURCES, ZLIB_SOURCES, ZLIB_DEFINES, game_browser_defines, updater_defines
 from tools.version import VERSION_SOURCES
 from tools.server_build import SDL_TARBALL_SHA256, SDL_TARBALL_URL, SDL_VERSION
 
 OPENGL_ONLY = {"d3d8_gl.c", "xbox_textures.c", "xgpu_post.c", "xgpu_shader_cache.c", "ui_overlay.c"}
+
+
+def _console_flags(sln):
+    if sln is None:
+        return [], []
+    console = [d for d in console_defines(sln) if not d.startswith("-DHALO_CONSOLE_PLAYERS=")]
+    return console, list(game_browser_defines(sln))
 
 
 def fetch_sdl_headers(build):
@@ -44,9 +57,10 @@ def fetch_sdl_headers(build):
     return destination / "include"
 
 
-def engine_objects(n, port, build, code_flags, includes):
+def engine_objects(n, port, build, code_flags, includes, sln=None):
     game = port.game
     config = port.load_port_config()
+    console, browser = _console_flags(sln)
     rewritten = build / "lp64"
     override = port.root / "overrides"
     roots = ("source", "port/linux/game", "port/linux/src", "port/linux/include",
@@ -91,12 +105,23 @@ def engine_objects(n, port, build, code_flags, includes):
            description="SWITCH2 EMBED $out")
     n.build(assets, "switch2_embed_assets",
             implicit=[game / "tools/embed_assets.py", *(game / path for path in hud_asset_inputs())])
-    n.build("switch2-platform-generated", "phony", [platform_semantics, assets])
+    generated_targets = [platform_semantics, assets]
+    if getattr(sln, "game_browser", False):
+        ui_fonts = build / "generated/ui_fonts.c"
+        n.rule("switch2_embed_fonts",
+               command=f"$python chupathingyce/tools/embed_assets.py --fonts {PROMPT_FONTS_FLAG}$out",
+               description="SWITCH2 EMBED $out")
+        n.build(ui_fonts, "switch2_embed_fonts",
+                implicit=[game / "tools/embed_assets.py", game / FONT_LIST,
+                          *(game / path for path in UI_FONT_FILES), *(game / path for path in PROMPT_ICONS)])
+        generated_targets.append(ui_fonts)
+    n.build("switch2-platform-generated", "phony", generated_targets)
 
     flags = [
         code_flags, includes, "-std=gnu89", "-D__STRICT_ANSI__", "-DHALO_64BIT",
         "-DHALO_CUSTOM_EDITION", "-DHALO_MAP_LIST", "-D_FORTIFY_SOURCE=0",
         "-DHALO_SWITCH_CONSOLE", "-DHALO_DELTA_PLATFORM=_delta_platform_switch",
+        *console, *browser,
         "-fsigned-char", "-fms-extensions", "-fshort-wchar", "-fcommon",
         "-fno-strict-aliasing", "-fwrapv", "-fno-delete-null-pointer-checks",
         "-fno-omit-frame-pointer", "-ffp-contract=off",
@@ -121,14 +146,20 @@ def engine_objects(n, port, build, code_flags, includes):
         f"-idirafter {rewritten / 'port/include/xdk'}",
     ]
     excluded = set(config["lp64"]["exclude"])
-    sources = [*port.game_sources(config), *sorted((game / "port/linux/game").glob("*.c"))]
+    units = list(port.game_units(sln, config)) if sln is not None else [(s, []) for s in port.game_sources(config)]
+    units.extend((s, []) for s in sorted((game / "port/linux/game").glob("*.c")))
+    if getattr(sln, "game_browser", False):
+        units.extend((s, []) for s in sorted((game / "server/src").glob("*.c")))
     objects = []
-    for source in sources:
+    for source, unit_flags in units:
         relative = source.relative_to(game)
         if relative.as_posix() in excluded:
             continue
         obj = build / "engine" / relative.with_suffix(".o")
-        extra = " -Dmain=halo_main" if relative.as_posix() == "source/shell/shell_xbox.c" else ""
+        extra_parts = list(unit_flags)
+        if relative.as_posix() == "source/shell/shell_xbox.c":
+            extra_parts.append("-Dmain=halo_main")
+        extra = (" " + " ".join(extra_parts)) if extra_parts else ""
         n.build(obj, "switch2_cc", rewritten / relative, implicit=[semantics],
                 order_only=[stamp], variables={"cflags": " ".join(flags) + extra})
         objects.append(obj)
@@ -143,16 +174,18 @@ def engine_objects(n, port, build, code_flags, includes):
     return objects
 
 
-def platform_objects(n, port, build, code_flags, includes, release):
+def platform_objects(n, port, build, code_flags, includes, release, sln=None):
     game = port.game
+    console, browser = _console_flags(sln)
     rewritten = build / "lp64"
     third = game / "port/third_party"
     src = game / "port/linux/src"
     sdl = build / "third_party/SDL3/include"
     base = f"{code_flags} {includes} -std=gnu11 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700"
+    abi_gates = (" " + " ".join([*console, *browser])) if (console or browser) else ""
     abi = (" -DHALO_LINUX_PLATFORM_LAYER -DHALO_64BIT -DHALO_SWITCH_CONSOLE"
            " -DHALO_CUSTOM_EDITION -DHALO_MAP_LIST -DHALO_MCC=0"
-           " -DHALO_DELTA_PLATFORM=_delta_platform_switch -D_FORTIFY_SOURCE=0"
+           f" -DHALO_DELTA_PLATFORM=_delta_platform_switch -D_FORTIFY_SOURCE=0{abi_gates}"
            " -fsigned-char -fms-extensions -fshort-wchar -fcommon -fno-strict-aliasing"
            " -fwrapv -fno-delete-null-pointer-checks -fno-omit-frame-pointer -ffp-contract=off")
     warnings = " ".join(f"-Werror={w}" for w in ("incompatible-pointer-types", "int-to-pointer-cast",
@@ -165,7 +198,8 @@ def platform_objects(n, port, build, code_flags, includes, release):
         *(f"-I{third / name}" for name in ("expat", "qrcodegen", "monocypher", "zlib")),
         f"-I{rewritten / 'source'}", f"-I{rewritten / 'source/cseries'}",
         f"-I{sdl}", f"-idirafter {rewritten / 'port/include/xdk'}"])
-    native = f"{base} -I{src} -I{sdl}"
+    browser_flags = (" " + " ".join(browser)) if browser else ""
+    native = f"{base}{browser_flags} -I{src} -I{sdl}"
     tls = (f"-I{third / 'mbedtls/include'} -I{third / 'mbedtls/library'} -D__unix__=1"
            " -DMBEDTLS_NO_PLATFORM_ENTROPY -DMBEDTLS_ENTROPY_HARDWARE_ALT -DMBEDTLS_PLATFORM_MS_TIME_ALT")
     upnp = (f"-I{third / 'miniupnpc/include'} -I{third / 'miniupnpc/src'} -DMINIUPNP_STATICLIB"
@@ -208,6 +242,8 @@ def platform_objects(n, port, build, code_flags, includes, release):
         add(generated, f"{platform} -I{rewritten / 'switch_guest'}", Path("switch_guest") / name,
             guest_headers)
     add(build / "generated/hud_hires_assets.c", platform, Path("generated/hud_hires_assets.c"))
+    if getattr(sln, "game_browser", False):
+        add(build / "generated/ui_fonts.c", platform, Path("generated/ui_fonts.c"))
     bridge = port.root / "host/switch2_headless_platform.c"
     bridge_rewritten = build / "lp64/switch2_headless_platform.c"
     n.build(bridge_rewritten, "switch2_lp64", bridge,

@@ -65,6 +65,60 @@ static float ui_pointer_warp_x, ui_pointer_warp_y;
 static float ui_pointer_wheel;
 #endif
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
+#ifdef __SWITCH2__
+#define SWITCH2_NMOUSE_DEVICE_ID 0x4E4D5332u
+static BOOL mouse_last_from_nmouse;
+
+__attribute__((weak)) void switch2_text_nmouse_configure(int mode, float sensitivity_x, float sensitivity_y, int invert_y)
+{
+	(void)mode; (void)sensitivity_x; (void)sensitivity_y; (void)invert_y;
+}
+__attribute__((weak)) bool nx2DisplaySetRefreshRate(uint32_t hz) { (void)hz; return false; }
+__attribute__((weak)) bool nx2DisplaySetFrameGeneration(bool enabled) { (void)enabled; return false; }
+__attribute__((weak)) void nx2DisplaySetInternalResolution(uint32_t height) { (void)height; }
+__attribute__((weak)) uint32_t nx2DisplayApply(int swap_interval) { (void)swap_interval; return 0; }
+__attribute__((weak)) int switch2PlatformRefreshRate(void) { return 60; }
+
+BOOL platform_mouse_is_nmouse(void)
+{
+	BOOL result;
+
+	pthread_mutex_lock(&input_lock);
+	result = mouse_last_from_nmouse;
+	pthread_mutex_unlock(&input_lock);
+	return result;
+}
+
+static void switch2_nmouse_config_sync(void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+	const char *mode_name;
+	int mode = 1;
+	float sx, sy;
+	int invert_y;
+
+	if (!config_loaded_yet() || read_at == config_changes())
+		return;
+	read_at = config_changes();
+	mode_name = config_string("input.joycon_mouse");
+	if (!strcmp(mode_name, "off"))
+		mode = 0;
+	else if (!strcmp(mode_name, "right"))
+		mode = 2;
+	else if (!strcmp(mode_name, "left"))
+		mode = 3;
+	else if (!strcmp(mode_name, "both"))
+		mode = 4;
+	sx = (float)config_real("input.joycon_mouse_sensitivity");
+	sy = (float)config_real("input.joycon_mouse_vertical_sensitivity");
+	if (sx <= 0.0f)
+		sx = 1.0f;
+	if (sy <= 0.0f)
+		sy = sx;
+	invert_y = config_boolean("input.joycon_mouse_invert_y");
+	switch2_text_nmouse_configure(mode, sx, sy, invert_y);
+}
+#endif
 /* rebinding (platform_binding_capture_begin), under input_lock: waiting for
 an input, and the one taken; then the keyboard and mouse settle (their keys
 and buttons held then are let go) before they drive anything again */
@@ -1820,11 +1874,32 @@ static void platform_refresh_rate_forget(void)
 {
 	platform_refresh_rate_known = FALSE;
 }
+#elif defined(__SWITCH2__)
+static float platform_refresh_rate_value;
+static Uint64 platform_refresh_rate_read_at;
+static BOOL platform_refresh_rate_known;
+
+static void platform_refresh_rate_forget(void)
+{
+	platform_refresh_rate_known = FALSE;
+}
 #endif
 
 static float platform_refresh_rate(void)
 {
-#ifndef HALO_ANDROID
+#ifdef __SWITCH2__
+	Uint64 now = SDL_GetTicks();
+
+	if (!platform_refresh_rate_known || now - platform_refresh_rate_read_at >= 500)
+	{
+		int rate = switch2PlatformRefreshRate();
+
+		platform_refresh_rate_value = rate > 0 ? (float)rate : 60.0f;
+		platform_refresh_rate_read_at = now;
+		platform_refresh_rate_known = TRUE;
+	}
+	return platform_refresh_rate_value;
+#elif !defined(HALO_ANDROID)
 	Uint64 now = SDL_GetTicks();
 
 	if (!platform_refresh_rate_known || now - platform_refresh_rate_read_at >= 1000)
@@ -1841,6 +1916,35 @@ static float platform_refresh_rate(void)
 	return 0.0f;
 #endif
 }
+
+#ifdef __SWITCH2__
+static void switch2_display_config_apply(void)
+{
+	double refresh_setting;
+	uint32_t wanted_hz;
+	int limit_height;
+	int vsync;
+	int interpolation;
+
+	if (!config_loaded_yet())
+		return;
+	refresh_setting = config_real("display.refresh_rate");
+	wanted_hz = refresh_setting >= 100.0 || refresh_setting <= 0.0 ? 120u : 60u;
+	limit_height = atoi(config_string("display.resolution_limit"));
+	if (limit_height < 480)
+		limit_height = 1080;
+	vsync = config_boolean("display.vsync");
+	interpolation = config_boolean("display.interpolation");
+	nx2DisplaySetInternalResolution((uint32_t)limit_height);
+	nx2DisplaySetRefreshRate(wanted_hz);
+	nx2DisplaySetFrameGeneration(interpolation && wanted_hz > 60u);
+	(void)nx2DisplayApply(vsync ? 1 : 0);
+	platform_refresh_rate_forget();
+	platform_log("display: Switch 2 target %dp @ %u Hz (granted %d Hz, vsync %s, max_fps %ld)",
+		limit_height, (unsigned)wanted_hz, switch2PlatformRefreshRate(), vsync ? "on" : "off",
+		config_integer("display.max_fps"));
+}
+#endif
 
 #if !defined(__APPLE__) || defined(HALO_IOS)
 #ifdef SWAP_INTERVAL_IN_STEP
@@ -2106,7 +2210,7 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 #ifdef _WIN32
 	platform_borderless_styles();
 #endif
-#ifdef XGPU_GL_LEGACY_AT_RUN_TIME
+#if defined(XGPU_GL_LEGACY_AT_RUN_TIME) && !defined(__SWITCH2__)
 	/* (HALO_GL_LEGACY=1: the older drivers' path on any, to test it) */
 	xgpu_gl_legacy = SDL_getenv("HALO_GL_LEGACY") && !strcmp(SDL_getenv("HALO_GL_LEGACY"), "1");
 	platform_gl_context = xgpu_gl_legacy ? NULL : SDL_GL_CreateContext(platform_window);
@@ -2152,7 +2256,7 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 		return FALSE;
 	}
 #endif
-#ifdef XGPU_GL_LEGACY_AT_RUN_TIME
+#if defined(XGPU_GL_LEGACY_AT_RUN_TIME) && !defined(__SWITCH2__)
 	if (xgpu_gl_legacy)
 	{
 		GLint major = 0, minor = 0;
@@ -2183,6 +2287,10 @@ BOOL platform_video_initialize(unsigned long width, unsigned long height)
 	}
 #else
 	version = 0;
+#ifdef __SWITCH2__
+	switch2_display_config_apply();
+	switch2_nmouse_config_sync();
+#endif
 	platform_swap_interval_apply(TRUE, config_boolean("display.vsync"), config_integer("display.max_fps"));
 #endif
 	(void)version;
@@ -2283,6 +2391,10 @@ void platform_display_apply(void)
 		macos_set_swap_interval(config_boolean("display.vsync") ? 1 : 0);
 	}
 #else
+#ifdef __SWITCH2__
+	switch2_display_config_apply();
+	switch2_nmouse_config_sync();
+#endif
 	platform_swap_interval_apply(TRUE, config_boolean("display.vsync"), config_integer("display.max_fps"));
 #endif
 }
@@ -2340,6 +2452,9 @@ static Uint64 frame_interval_ns(void)
 {
 	static int vsync;
 	static long maximum;
+#ifdef __SWITCH2__
+	static int interpolation = 1;
+#endif
 	static unsigned long read_at = (unsigned long)-1;
 	float rate;
 
@@ -2348,7 +2463,34 @@ static Uint64 frame_interval_ns(void)
 		read_at = config_changes();
 		vsync = config_boolean("display.vsync");
 		maximum = config_integer("display.max_fps");
+#ifdef __SWITCH2__
+		interpolation = config_boolean("display.interpolation");
+#endif
 	}
+#ifdef __SWITCH2__
+	{
+		float granted;
+
+		if (!interpolation)
+			return 1000000000ULL / 30ULL;
+		granted = platform_refresh_rate();
+		if (granted <= 0.0f)
+			granted = 60.0f;
+		if (maximum > 0)
+		{
+			if (vsync && (float)maximum >= granted - 1.0f)
+				return 0;
+			return (Uint64)(1000000000.0 / (double)maximum);
+		}
+		if (maximum == 0)
+		{
+			if (vsync)
+				return 0;
+			return (Uint64)(1000000000.0 / (double)(granted > 60.0f ? granted : 120.0f));
+		}
+		return 0;
+	}
+#endif
 #ifdef SWAP_INTERVAL_IN_STEP
 	/* (in step with the display, or no longer: the refresh rate known only
 	once the window is shown, as under gamescope, the window moved to
@@ -2424,6 +2566,7 @@ void platform_video_swap(void)
 		shown: a capture hooked into the swap (OBS's game capture) copies
 		from whatever is bound for reading, and the render target the frame
 		was blitted from holds it upside down (row 0 the top) */
+#ifndef __SWITCH2__
 		if (platform_gl_context)
 		{
 #ifdef HALO_IOS
@@ -2432,6 +2575,7 @@ void platform_video_swap(void)
 			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 #endif
 		}
+#endif
 		SDL_GL_SwapWindow(platform_window);
 	}
 	/* (a frame the graphics driver held for seconds: the game froze, and
@@ -3116,6 +3260,9 @@ void platform_pump_events(void)
 #ifdef HALO_CONSOLE_PERFORMANCE_MODE
 	console_performance_update();
 #endif
+#ifdef __SWITCH2__
+	switch2_nmouse_config_sync();
+#endif
 
 #ifdef HALO_GAME_BROWSER
 	/* the dedicated server has no window, but stops as asked (SIGTERM or
@@ -3282,6 +3429,9 @@ void platform_pump_events(void)
 				mouse_needs_warp = TRUE;
 			}
 #endif
+#ifdef __SWITCH2__
+			mouse_last_from_nmouse = (event.motion.which == SWITCH2_NMOUSE_DEVICE_ID);
+#endif
 			input_state.mouse_dx += event.motion.xrel;
 			input_state.mouse_dy += event.motion.yrel;
 			break;
@@ -3326,6 +3476,9 @@ void platform_pump_events(void)
 #endif
 			if (event.button.button < PLATFORM_MOUSE_BUTTON_COUNT)
 			{
+#ifdef __SWITCH2__
+				mouse_last_from_nmouse = (event.button.which == SWITCH2_NMOUSE_DEVICE_ID);
+#endif
 				input_state.mouse_buttons[event.button.button] = event.button.down;
 				if (event.button.down)
 					mouse_buttons_pressed[event.button.button] = 1;

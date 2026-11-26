@@ -38,6 +38,9 @@ and presenting go there; a draw and a visibility test do nothing yet.
 
 void d3d8_surface_initialize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
+#ifdef HALO_64BIT
+BOOL d3d8_index_buffer_contains(const void *address, size_t size);
+#endif
 
 /* what the context supports: xbox_textures.c reads it (as d3d8_gl.c
 defines it on Android); nothing here is OpenGL, so nothing is supported */
@@ -2853,6 +2856,13 @@ static BOOL indices_fixed(const WORD *indices, unsigned long count)
 	/* (Warthog's tag cache: platform.h, mapped at its address by xbox_memory.c) */
 #ifdef HALO_64BIT
 	uintptr_t custom = platform_ce_tag_cache_ready ? (uintptr_t)xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE) : 0;
+
+	/* On LP64, D3DDevice_CreateIndexBuffer allocates in PLATFORM_CONTIGUOUS_BASE
+	   so xbox_address() fits in 32 bits. Those buffers (notably dynamic_triangles)
+	   are rewritten in place each frame without buffer renaming, so they are NOT
+	   fixed and must be copied inline into the command stream. */
+	if (d3d8_index_buffer_contains(indices, (size_t)count * sizeof(WORD)))
+		return FALSE;
 #else
 	unsigned long custom = platform_ce_tag_cache_ready ? (unsigned long)PLATFORM_CE_TAG_CACHE_BASE : 0;
 #endif
@@ -2867,7 +2877,8 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 {
 	struct dk_command_draw *command;
 	unsigned long stream, streams = 0, slot = 0;
-	unsigned long index_bytes = indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
+	BOOL fixed_indices = !indices || indices_fixed(indices, count);
+	unsigned long index_bytes = indices && !fixed_indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT ?
 		(count * sizeof(WORD) + 3) & ~3UL : 0;
 
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
@@ -2895,6 +2906,11 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
 	draw_resources_used(indices != NULL, TRUE);
+	if (indices && !fixed_indices && !index_bytes)
+	{
+		stream_flush();
+		host_dk_idle();
+	}
 }
 
 void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)

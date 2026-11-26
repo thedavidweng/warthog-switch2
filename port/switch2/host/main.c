@@ -237,8 +237,31 @@ static void log_shader_runtime(void)
 
 extern uintptr_t warthog_engine_symbol_anchor(void);
 
+static bool console_opened;
+
+static void ensure_console_open(void)
+{
+	if (!console_opened)
+	{
+		consoleInit(NULL);
+		console_opened = true;
+	}
+}
+
+static void close_console_and_release_vi2(void)
+{
+	if (console_opened)
+	{
+		consoleExit(NULL);
+		console_opened = false;
+	}
+	/* Release any software-framebuffer VI2 layer so Drako3D gets a fresh GSV root. */
+	(void)nwindowReleaseVi2Layer(nwindowGetDefault());
+}
+
 static void wait_for_menu_return(u64 buttons, const char *prompt)
 {
+	ensure_console_open();
 	printf("%s\n", prompt);
 	consoleUpdate(NULL);
 	PadState pad;
@@ -259,6 +282,7 @@ static void extraction_progress(void *ctx, int index, int count, const char *pat
 	static int previous_percent = -1;
 	int percent = total ? (int)(done * 100 / total) : 100;
 	(void)ctx;
+	ensure_console_open();
 	if (previous != index || previous_percent != percent)
 	{
 		printf("\rExtracting %d/%d: %s %d%%          ", index, count, path, percent);
@@ -280,12 +304,13 @@ int main(int argc, char **argv)
 		switch2PlatformRestoreClock();
 		return 1;
 	}
-	consoleInit(NULL);
 	if (!warthog_log_open())
 	{
 		/* nothing can be logged, so the screen is the only report */
+		ensure_console_open();
 		printf("Warthog for Switch 2: cannot write sdmc:/switch/warthog/logs/warthog.log\n");
-		consoleExit(NULL);
+		consoleUpdate(NULL);
+		close_console_and_release_vi2();
 		switch2PlatformRestoreClock();
 		return 1;
 	}
@@ -301,6 +326,8 @@ int main(int argc, char **argv)
 	log_launch_context();
 	log_firmware();
 	log_core_mask();
+	if (nx2CoreMask() & 1ULL)
+		(void)svcSetThreadCoreMask(CUR_THREAD_HANDLE, 0, 1ULL << 0);
 	log_syscalls();
 	log_memory();
 	log_renderer();
@@ -311,6 +338,7 @@ int main(int argc, char **argv)
 	warthog_log("INFO", "memory budget: %llu bytes of heap", (unsigned long long)available);
 	if (switch2_lifecycle_refuse_launch(restricted, available))
 	{
+		ensure_console_open();
 		warthog_log_console("ERROR", "Restricted applet mode or insufficient memory. Launch Warthog using title takeover "
 			"(full-memory Application mode) under kaiHEN.");
 		wait_for_menu_return(HidNpadButton_Plus | HidNpadButton_B,
@@ -318,7 +346,7 @@ int main(int argc, char **argv)
 		switch2PlatformRestoreClock();
 		nx2ExitCleanupNow();
 		warthog_log_close();
-		consoleExit(NULL);
+		close_console_and_release_vi2();
 		return 1;
 	}
 	SocketInitConfig sockets = *socketGetDefaultInitConfig();
@@ -363,10 +391,9 @@ int main(int argc, char **argv)
 		char message[512];
 		int status = switch2_gamedata_prepare("sdmc:/switch/warthog", "sdmc:/switch/ChupaThingyCE",
 			0, extraction_progress, NULL, message, sizeof(message));
-		warthog_log_console(status == SWITCH2_GAMEDATA_OK ? "INFO" : "ERROR", "%s", message);
-		consoleUpdate(NULL);
 		if (status == SWITCH2_GAMEDATA_OK)
 		{
+			warthog_log("INFO", "%s", message);
 			char path[1024];
 			const char *root = getenv("HALO_DATA_ROOT");
 			if (!root || !*root) root = "sdmc:/switch/warthog";
@@ -375,7 +402,7 @@ int main(int argc, char **argv)
 			{
 				warthog_log("INFO", "maps/ui.map ready; releasing console and entering Halo main menu via Drako3D");
 				warthog_log_sync();
-				consoleExit(NULL);
+				close_console_and_release_vi2();
 				switch2PlatformDisplayInit();
 				switch2_lifecycle_start();
 				atexit(switch2_lifecycle_cleanup);
@@ -396,6 +423,9 @@ int main(int argc, char **argv)
 		}
 		else
 		{
+			ensure_console_open();
+			warthog_log_console("ERROR", "%s", message);
+			consoleUpdate(NULL);
 			wait_for_menu_return(HidNpadButton_Plus,
 				"Press + to return to the homebrew menu.");
 		}
@@ -403,11 +433,14 @@ int main(int argc, char **argv)
 	warthog_log("INFO", "startup complete; returning to the homebrew menu");
 	/* before the screen, which is what a player sees if the sync failed */
 	warthog_log_sync();
-	warthog_log_console("INFO", "Warthog for Switch 2 %s: log written to %s",
-		WARTHOG_SWITCH2_VERSION, "sdmc:/switch/warthog/logs/warthog.log");
+	if (console_opened)
+	{
+		warthog_log_console("INFO", "Warthog for Switch 2 %s: log written to %s",
+			WARTHOG_SWITCH2_VERSION, "sdmc:/switch/warthog/logs/warthog.log");
+	}
 	if (sockets_ready) socketExit();
 	warthog_log_close();
-	consoleExit(NULL);
+	close_console_and_release_vi2();
 	nx2ExitCleanupNow();
 	switch2PlatformRestoreClock();
 	return 0;

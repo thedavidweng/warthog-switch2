@@ -13,6 +13,7 @@ int nx2CoreCount(void);
 int nx2CoreAt(unsigned n);
 Result nx2SetCpuBoost(bool on);
 void nx2DisplayInit(void);
+bool nx2DisplaySetRefreshRate(uint32_t hz);
 bool nx2DisplaySetFrameGeneration(bool enabled);
 void nx2DisplaySetInternalResolution(u32 height);
 int nx2DisplayRefreshRate(void);
