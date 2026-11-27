@@ -84,15 +84,10 @@ def upstream_record() -> dict:
 
 
 def nacp_version(record: dict) -> str:
-    """the version hbmenu shows: the pinned upstream release's
-
-    Upstream names its release 0.9.1a, where the trailing letter is the
-    build's and not the version's: the console shows 0.9.1. The field is 16
-    bytes, and a version a player cannot read is worse than a shorter one.
-    """
-    version = record["upstream"]["version"].rstrip("abcdefghijklmnopqrstuvwxyz")
+    """The Switch 2 release version, which hbmenu shows in a 16-byte field."""
+    version = record["switch2_version"]
     if not version or len(version) >= 16:
-        raise SystemExit(f"port/switch2: UPSTREAM.json's version {record['upstream']['version']!r} "
+        raise SystemExit(f"port/switch2: UPSTREAM.json's Switch 2 version {version!r} "
                          f"is not an NACP display version")
     return version
 
@@ -131,7 +126,7 @@ def build_header(sln: Any, record: dict) -> str:
     """warthog_build.h: what the log records about the build that wrote it"""
     flavor = "release" if getattr(sln, "port_release", False) else "debug"
     pins = {
-        "WARTHOG_SWITCH2_VERSION": record["upstream"]["version"],
+        "WARTHOG_SWITCH2_VERSION": nacp_version(record),
         "WARTHOG_SWITCH2_FLAVOR": flavor,
         "WARTHOG_SWITCH2_WARTHOG_SWITCH_COMMIT": record["upstream"]["commit"],
         "WARTHOG_SWITCH2_CHUPATHINGYCE_COMMIT": record["submodules"]["chupathingyce"]["commit"],
@@ -341,7 +336,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
            description="SWITCH2 AR $out", rspfile="$out.rsp", rspfile_content="$in_newline")
     n.build(outputs=game_archive, rule="switch2_ar", inputs=game_objects)
     n.build(outputs="switch2-engine-game", rule="phony", inputs=game_archive)
-    platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release, sln)
+    platform_objects = engine_build["platform_objects"](n, port, BUILD, code_flags, includes, release, version, sln)
     platform_archive = BUILD / "libwarthog_platform.a"
     n.build(outputs=platform_archive, rule="switch2_ar", inputs=platform_objects)
     n.build(outputs="switch2-engine-platform", rule="phony", inputs=platform_archive)

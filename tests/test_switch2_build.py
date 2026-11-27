@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 NACP_TITLE = "Warthog"
 NACP_AUTHOR = "thedavidweng, ChupathingyCE contributors"
-NACP_VERSION = "0.9.1"
+NACP_VERSION = json.loads(UPSTREAM.read_text(encoding="utf-8"))["switch2_version"]
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF\x00" + b"\x00" * 16 + b"\xff\xd9"
 
@@ -313,7 +313,9 @@ class ToolchainPinTest(unittest.TestCase):
     def test_the_image_installs_the_platform_the_build_links(self):
         # libounce is the platform, and the three things devkitPro does not
         # ship (Drako3D, the UAM2 runtime, drakotools) are built from source.
-        self.assertIn("libounce", self.dockerfile)
+        for package in ("libounce", "libkaihen", "ouncevk"):
+            version = self.record["dependencies"][package]["release"]
+            self.assertIn(f"${{OUNCE_REPO_URL}}/{package}-{version}-1-any.pkg.tar.zst", self.dockerfile)
         for header in ("drako3d.h", "libdrako3d.a", "uam2rt.h", "libuam2rt.a"):
             with self.subTest(header=header):
                 self.assertIn(header, self.dockerfile)

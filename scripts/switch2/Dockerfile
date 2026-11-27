@@ -28,12 +28,15 @@ RUN set -eux; \
     rm -f /tmp/ounce.gpg; \
     printf '\n[ounce]\nServer = %s\n' "${OUNCE_REPO_URL}" >> "${DEVKITPRO}/pacman/etc/pacman.conf"; \
     dkp-pacman -Sy --noconfirm --needed \
+        switch-tools switch-pkg-config dkp-toolchain-vars \
+        switch-sdl2 switch-curl switch-mbedtls switch-zlib switch-bzip2; \
+    dkp-pacman -U --noconfirm --needed \
         --overwrite '/opt/devkitpro/libounce/*' \
         --overwrite '/opt/devkitpro/portlibs/switch2/*' \
         --overwrite /opt/devkitpro/switch2vars.sh \
-        libounce libkaihen ouncevk \
-        switch-tools switch-pkg-config dkp-toolchain-vars \
-        switch-sdl2 switch-curl switch-mbedtls switch-zlib switch-bzip2; \
+        "${OUNCE_REPO_URL}/libounce-20261125-1-any.pkg.tar.zst" \
+        "${OUNCE_REPO_URL}/libkaihen-20261123-1-any.pkg.tar.zst" \
+        "${OUNCE_REPO_URL}/ouncevk-20261123.1-1-any.pkg.tar.zst"; \
     test "$(dkp-pacman -Q libounce)" = "libounce 20261125-1"; \
     test "$(dkp-pacman -Q libkaihen)" = "libkaihen 20261123-1"; \
     test "$(dkp-pacman -Q ouncevk)" = "ouncevk 20261123.1-1"; \

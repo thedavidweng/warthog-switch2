@@ -117,8 +117,9 @@ implemented.
 
 ### Install
 
-> Note: No public `v<version>` release has been published yet. Once cut (or
-> when testing a build from CI or your own build), the SD card layout is:
+Download the Switch 2 preview from [Releases](https://github.com/thedavidweng/warthog-switch2/releases).
+Preview builds are installed manually. See the [changelog](CHANGELOG.md) for
+changes and known issues.
 
 1. Unpack `warthog-switch2-release.zip` (or `warthog-switch2-debug.zip`) at the
    root of your Switch 2 microSD card. Everything lands under

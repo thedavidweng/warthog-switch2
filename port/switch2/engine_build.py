@@ -174,7 +174,7 @@ def engine_objects(n, port, build, code_flags, includes, sln=None):
     return objects
 
 
-def platform_objects(n, port, build, code_flags, includes, release, sln=None):
+def platform_objects(n, port, build, code_flags, includes, release, version, sln=None):
     game = port.game
     console, browser = _console_flags(sln)
     rewritten = build / "lp64"
@@ -215,6 +215,8 @@ def platform_objects(n, port, build, code_flags, includes, release, sln=None):
 
     excluded = {"updater.c", "launcher.c", "voice.c", "memory_watch.c"} | OPENGL_ONLY
     posix = {"posix_files.c", "posix_threads.c", "posix_time.c", "posix_browser.c", "posix_upnp.c", "posix_ui_font.c"}
+    # Use the port's version for the in-game build identity as well as hbmenu.
+    version_flags = updater_defines(release) + f' -UHALO_VERSION -DHALO_VERSION=\\"{version}\\"'
     for source in sorted(src.glob("*.c")):
         name = source.name
         if name in excluded or (name.startswith("posix_") and name not in posix):
@@ -224,7 +226,7 @@ def platform_objects(n, port, build, code_flags, includes, release, sln=None):
                     f"-I{third / 'stb'}" if name == "posix_ui_font.c" else ""
             add(source, f"{extra} {native}", source.relative_to(game))
         else:
-            extra = updater_defines(release) if name in VERSION_SOURCES else \
+            extra = version_flags if name in VERSION_SOURCES else \
                     f"-idirafter {src}" if name == "text_hires.c" else ""
             add(rewritten / source.relative_to(game), f"{platform} {extra}", source.relative_to(game))
     guest = port.root.parent / "switch/guest"

@@ -33,8 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # What hbmenu shows. The title and author are fixed rather than taken from the
 # environment: $USER on a build machine is whoever's account ran it, which
-# would put a different publisher on every release. The version is the pinned
-# upstream release's, so it cannot drift from UPSTREAM.json.
+# would put a different publisher on every release. UPSTREAM.json supplies
+# the Switch 2 release version.
 NACP_TITLE = "Warthog"
 NACP_AUTHOR = "thedavidweng, ChupathingyCE contributors"
 NACP_SIZE = 16384
@@ -43,14 +43,9 @@ NACP_VERSION_SIZE = 0x10
 
 
 def nacp_version() -> str:
-    """the NACP's display version: UPSTREAM.json's upstream version
-
-    Upstream names its release 0.9.1a, where the trailing letter is the
-    build's, not the version's: the console shows 0.9.1. The field is 16
-    bytes and must stay a version a player can read.
-    """
+    """The NACP display version of this Switch 2 release."""
     record = json.loads((ROOT / "UPSTREAM.json").read_text(encoding="utf-8"))
-    version = record["upstream"]["version"].rstrip("abcdefghijklmnopqrstuvwxyz")
+    version = record["switch2_version"]
     if not version or len(version) >= NACP_VERSION_SIZE:
         raise ValueError(f"UPSTREAM.json's version {record['upstream']['version']!r} is not an NACP display version")
     return version
