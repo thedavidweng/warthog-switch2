@@ -7,13 +7,11 @@ memory over a frame and handed to the host in one call (host_dk_submit), so
 that a frame costs one crossing from the guest to the host rather than one a
 draw.
 
-Shared by both halves, which are built for different ABIs (the guest's
-pointers are 32 bits, the host's 64): every field is a 32-bit integer or
-float, and an address is a guest one, which the host can read directly (the
-guest's memory is below 4 GB).
+Switch 1 addresses are 32-bit guest addresses; Switch 2 addresses have
+the width of a native pointer. Xbox surface offsets remain 32-bit.
 
 Each command starts with a header naming its type and its size in bytes,
-the header included; sizes are multiples of 4.
+the header included; sizes are multiples of the address width.
 */
 
 #ifndef __DK_COMMANDS_H
@@ -21,6 +19,15 @@ the header included; sizes are multiples of 4.
 
 #include <stdint.h>
 #include "dk_shaders.h"
+
+#ifndef DK_ADDR_T_DEFINED
+#define DK_ADDR_T_DEFINED
+#ifdef __SWITCH2__
+typedef uintptr_t dk_addr_t;
+#else
+typedef uint32_t dk_addr_t;
+#endif
+#endif
 
 enum
 {
@@ -125,7 +132,7 @@ struct dk_command_picture
 /* the host's (host_imports.list): copies width * height * 4 bytes of RGBA
 texels at guest address rgba for a DK_COMMAND_PICTURE of this frame; the
 slot they went to, or -1 */
-int host_dk_picture(unsigned int rgba, unsigned int width, unsigned int height);
+int host_dk_picture(dk_addr_t rgba, unsigned int width, unsigned int height);
 
 /* shows the back buffer, letterboxed to the display. A screenshot is asked
 for by a guest address of width * height * 4 bytes (debug.screenshot_every),
@@ -135,7 +142,7 @@ struct dk_command_present
 {
 	struct dk_command_header header;
 	struct dk_surface back_buffer;
-	uint32_t screenshot;
+	dk_addr_t screenshot;
 };
 
 /* ---------- draws (DEKO3D.md, phase 6)
@@ -326,7 +333,7 @@ struct dk_command_texture
 	uint32_t height;
 	uint32_t depth;
 	uint32_t levels;
-	uint32_t source;
+	dk_addr_t source;
 	uint32_t face_bytes;
 	uint32_t source_bytes;
 	/* the channel (0 red, 1 green, 2 blue, 3 alpha) each of the image's red,
@@ -347,9 +354,9 @@ struct dk_hud_sheet
 {
 	uint32_t asset;
 	/* guest addresses: the PNG, and the bitmap's tag name (for the log) */
-	uint32_t png;
+	dk_addr_t png;
 	uint32_t png_size;
-	uint32_t tag;
+	dk_addr_t tag;
 };
 
 struct dk_command_hud_prepare
@@ -372,7 +379,7 @@ struct dk_command_hud_image
 /* the host's (host_imports.list): 1 the sheet decoded, and an image of it
 may be asked for; 0 not yet (queued if it was not); -1 never. png and tag
 are the sheet's, as struct dk_hud_sheet's */
-int host_dk_hud_ready(unsigned int asset, unsigned int png, unsigned int png_size, unsigned int tag);
+int host_dk_hud_ready(unsigned int asset, dk_addr_t png, unsigned int png_size, dk_addr_t tag);
 
 /* the sheets decoded and not drawn let go, those still to decode dropped
 (the map is unloaded) */
@@ -392,7 +399,7 @@ struct dk_command_texture_rows
 	uint32_t level;
 	uint32_t top;
 	uint32_t rows;
-	uint32_t source;
+	dk_addr_t source;
 	uint32_t source_bytes;
 };
 
@@ -586,11 +593,11 @@ struct dk_command_draw
 	indices, or DK_INDEX_INLINE: they follow the streams (after any inline
 	bytes, at a multiple of 4); and the number added to the vertex each names
 	(the streams start at the lowest vertex the draw reads) */
-	uint32_t index_address;
+	dk_addr_t index_address;
 	int32_t vertex_offset;
 	uint32_t inline_bytes;
 	uint32_t stream_count;
-	uint32_t streams[][2];
+	dk_addr_t streams[][2];
 };
 
 #endif

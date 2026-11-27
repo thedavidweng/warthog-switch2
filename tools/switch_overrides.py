@@ -20,13 +20,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GAME = ROOT / "chupathingyce"
-OVERRIDES = ROOT / "port" / "switch" / "overrides"
-README = OVERRIDES / "README.md"
+OVERRIDE_DIRS = [ROOT / "port" / name / "overrides" for name in ("switch", "switch2")]
 
 
-def overrides() -> list:
+def overrides(directory: Path) -> list:
     """the override files, by their path in the game ("source/memory/data.c")"""
-    return sorted(path.relative_to(OVERRIDES).as_posix() for path in OVERRIDES.rglob("*")
+    return sorted(path.relative_to(directory).as_posix() for path in directory.rglob("*")
                   if path.is_file() and path.suffix in (".c", ".h"))
 
 
@@ -35,20 +34,25 @@ def main() -> int:
     parser.add_argument("--diff", action="store_true", help="show each override's change against the game's file")
     arguments = parser.parse_args()
 
-    names = overrides()
-    readme = README.read_text(encoding="utf-8") if README.is_file() else ""
+    return int(any([check(directory, arguments.diff) for directory in OVERRIDE_DIRS]))
+
+
+def check(directory: Path, show_diff: bool) -> bool:
+    names = overrides(directory)
+    readme_path = directory / "README.md"
+    readme = readme_path.read_text(encoding="utf-8") if readme_path.is_file() else ""
     failed = False
     if not names:
-        print("no overrides: the game is built from the submodule alone")
-        return 0
+        print(f"{directory.relative_to(ROOT)}: no overrides")
+        return False
     for name in names:
-        override = OVERRIDES / name
+        override = directory / name
         upstream = GAME / name
         if not upstream.is_file():
             # (a unit of the port's own under port/linux/game is an addition, compiled with the game's units)
             if name.startswith("port/linux/game/") and name.endswith(".c"):
                 if f"## {name}" not in readme:
-                    print(f"{name}: FAILED, not listed in {README.relative_to(ROOT)} (a heading '## {name}')")
+                    print(f"{name}: FAILED, not listed in {readme_path.relative_to(ROOT)} (a heading '## {name}')")
                     failed = True
                 else:
                     print(f"{name}: a unit the game has not ({sum(1 for _ in override.open(encoding='utf-8', errors='replace'))} lines)")
@@ -62,17 +66,17 @@ def main() -> int:
                       not line.startswith(("+++", "---")))
         if not changed:
             print(f"{name}: FAILED, identical to the submodule's file: upstream has it, so delete the override "
-                  f"and its entry in {README.relative_to(ROOT)}")
+                  f"and its entry in {readme_path.relative_to(ROOT)}")
             failed = True
         elif f"## {name}" not in readme:
-            print(f"{name}: FAILED, not listed in {README.relative_to(ROOT)} (a heading '## {name}')")
+            print(f"{name}: FAILED, not listed in {readme_path.relative_to(ROOT)} (a heading '## {name}')")
             failed = True
         else:
             print(f"{name}: overrides the submodule's ({changed} lines differ)")
-        if arguments.diff:
+        if show_diff:
             sys.stdout.writelines(difflib.unified_diff(theirs, ours, fromfile=f"chupathingyce/{name}",
-                                                       tofile=f"port/switch/overrides/{name}"))
-    return 1 if failed else 0
+                                                       tofile=str((directory / name).relative_to(ROOT))))
+    return failed
 
 
 if __name__ == "__main__":

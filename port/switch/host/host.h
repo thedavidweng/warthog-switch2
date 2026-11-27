@@ -13,6 +13,15 @@ port/android/include/halo_android_abi.h for the guest contract.
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef DK_ADDR_T_DEFINED
+#define DK_ADDR_T_DEFINED
+#ifdef __SWITCH2__
+typedef uintptr_t dk_addr_t;
+#else
+typedef uint32_t dk_addr_t;
+#endif
+#endif
+
 #include "halo_android_abi.h"
 
 /* ---------- logging (logcat tag "halo")
@@ -212,6 +221,9 @@ void host_run_guest_main(uint32_t boot) __attribute__((noreturn));
 threads that never run guest code (host_dk_shaders.c's compile thread);
 logs "a thread starts on core N" when it does */
 void host_thread_place_on_helper_core(void);
+#ifdef __SWITCH2__
+void host_thread_place_on_render_core(void);
+#endif
 
 /* ---------- the renderer (host_main.c)
 
@@ -257,7 +269,7 @@ void host_dk_hud_prepare(const struct dk_hud_sheet *list, uint32_t count);
 void host_dk_hud_forget(void);
 /* the guest's (host_imports.list): 1 the sheet decoded, 0 not yet (queued if
 it was not), -1 never */
-int host_dk_hud_ready(unsigned int asset, unsigned int png, unsigned int png_size, unsigned int tag);
+int host_dk_hud_ready(unsigned int asset, dk_addr_t png, unsigned int png_size, dk_addr_t tag);
 /* the render thread's: the decoded levels, now its own; 0 if there are none */
 int host_dk_hud_take(uint32_t asset, struct host_dk_hud_levels *levels);
 int host_dk_hud_decode(const unsigned char *data, uint32_t size, struct host_dk_hud_levels *levels);
@@ -275,13 +287,16 @@ extern int host_dk_no_compression, host_dk_no_target_barriers, host_dk_lod_bias;
 
 /* host_dk.c: runs a frame's commands from the deko3d renderer's guest half
 (port/switch/guest/dk_commands.h); commands is a guest address */
-void host_dk_submit(uint32_t commands, uint32_t size);
+void host_dk_submit(dk_addr_t commands, uint32_t size);
 /* the guest's (host_imports.list): the loading screen's picture of this
 frame, width * height * 4 bytes of RGBA at guest address rgba, copied for
 the frame's DK_COMMAND_PICTURE; the slot the copy went to, or -1 */
-int host_dk_picture(unsigned int rgba, unsigned int width, unsigned int height);
+int host_dk_picture(dk_addr_t rgba, unsigned int width, unsigned int height);
 /* the queue drained (a map is going, or the process is exiting) */
 void host_dk_idle(void);
+#ifdef __SWITCH2__
+void host_dk_shutdown(void);
+#endif
 /* set once deko3d has presented a frame, after which its swapchain paces
 the frames, not the stand-in window's swap */
 extern int host_dk_presenting;
@@ -313,12 +328,12 @@ a 64-bit hash of its key; the host never sees keys, only hashes and GLSL. */
 *state (when state_out is a guest address) says which: 0 unknown, 1 queued
 or compiling. Loads a shader whose file is on the card (~2 ms), on the game
 thread, the only thread that touches deko3d. */
-uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, uint32_t state_out);
+uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, dk_addr_t state_out);
 /* queues the shader to be compiled in the background and written to the
 card. glsl is a guest address, copied into host memory. Already queued: the
 priority is raised if the new one is higher, and the GLSL is ignored (the
 old copy compiles the same). Already on the card or compiled: nothing. */
-void host_dk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl, uint32_t glsl_size,
+void host_dk_shader_compile(uint32_t stage, uint64_t hash, dk_addr_t glsl, uint32_t glsl_size,
 	uint32_t priority);
 /* what the host has of a shader, without loading it: 0 nothing, 1 queued
 or being compiled, 2 on the card, 3 loaded (the guest's startup pass) */
@@ -376,6 +391,7 @@ void host_debug_start_sampler(const char *setting);
 counted and written to the profile folder (0 none); image names the guest
 image running, for tools/switch_profile.py */
 void host_debug_start_profiler(unsigned hz, const char *image);
+void host_debug_shutdown(void);
 /* a frame of frame_ns just ended: with the profiler on, a frame of 40 ms or
 more has the game threads' samples in it written alone (profile/spike_NNN.txt) */
 void host_debug_profile_spike(uint64_t frame_ns);

@@ -33,7 +33,12 @@ jobs:
           test -f build.ninja
           grep -q '^# Switch build: no devkitPro found' build.ninja
       - name: The port's Python compiles
-        run: python3 -m py_compile port/switch/build.py tools/*.py
+        run: python3 -m py_compile port/switch/build.py port/switch2/build.py tools/*.py
+      # (tests/test_repo_docs.py: UPSTREAM.json's pins, AGENTS.md's sections,
+      # GLOSSARY.md's terms and README.md's claims, with no toolchain and no
+      # console. Runs before the submodule is needed.)
+      - name: The repository's documentation and upstream record agree
+        run: python3 -m unittest discover -s tests -v
       # (port/switch/overrides/README.md: each still differs from upstream's
       # file, has one to stand in for, and is listed)
       - name: The overrides of the game's files are still needed and listed

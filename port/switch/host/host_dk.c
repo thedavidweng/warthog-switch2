@@ -42,6 +42,15 @@ give.
 
 #include <deko3d.h>
 #include <switch.h>
+#ifdef __SWITCH2__
+#include "../../switch2/host/nx2_platform.h"
+#include "../../switch2/host/switch2_lifecycle.h"
+#include "../../switch2/host/switch2_splitscreen.h"
+#include "../../switch2/host/switch2_drako3d.h"
+#include "../../switch2/host/switch2_perf.h"
+#include "../../switch2/host/nx2_gameshare.h"
+#include "../../switch2/host/switch2_gameshare.h"
+#endif
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -49,6 +58,10 @@ give.
 #include <string.h>
 
 #define FRAMES 3
+#ifdef __SWITCH2__
+_Static_assert(DkInvalidateFlags_Image == (1u << 0), "switch2_drako3d image invalidate flag mismatch");
+_Static_assert(DkInvalidateFlags_L2Cache == (1u << 4), "switch2_drako3d L2 cache invalidate flag mismatch");
+#endif
 /* the swapchain's images: three, so a frame that misses the display's
 refresh starts the next one rather than waiting for the refresh after (a
 17 ms frame cost 33 with two; 10.8% of the game thread in a match was the
@@ -74,7 +87,7 @@ in memory nothing else writes. */
 #define IMAGE_BLOCK_SIZE (32 * 1024 * 1024)
 #define IMAGE_BLOCK_LIMIT 16
 #define TARGET_LIMIT 256
-/* the output: 1280x720 in handheld, 1920x1080 docked (host_dk_output_height) */
+/* Switch 1 keeps its 720p handheld output; Switch 2 supplies the VI2 output dimensions. */
 #define SCREEN_WIDTH 1280
 #define SCREEN_HEIGHT 720
 #define SCREEN_FULL_WIDTH 1920
@@ -91,7 +104,11 @@ it can be, HALO_GUEST_WINDOW_MAXIMUM (512 MB), is 32 of them */
 
 /* what a frame can upload (CreateIndexBuffer's index data, immediate-mode
 vertices, quad lists' indices); one slice per ring frame */
+#ifdef __SWITCH2__
+#define UPLOAD_SLICE_SIZE (16 * 1024 * 1024)
+#else
 #define UPLOAD_SLICE_SIZE (4 * 1024 * 1024)
+#endif
 #define UPLOAD_ALIGNMENT 256
 
 /* the window ranges a submission's draws read, cleaned from the CPU's cache
@@ -103,10 +120,14 @@ of memory: each at an offset aligned as deko3d wants uniform buffers. Their
 contents are written by the command stream (dkCmdBufPushConstants), in order
 with the draws that read them, so one copy of each does for every frame in
 flight. */
+#define UNIFORM_ALIGN(n) (((uint32_t)(n) + DK_UNIFORM_BUF_ALIGNMENT - 1) & ~(uint32_t)(DK_UNIFORM_BUF_ALIGNMENT - 1))
+#define UNIFORM_VERTEX_CONSTANTS_SIZE UNIFORM_ALIGN(sizeof(struct dk_vertex_constants))
+#define UNIFORM_VERTEX_PARAMETERS_SIZE UNIFORM_ALIGN(sizeof(struct dk_vertex_parameters))
+#define UNIFORM_PIXEL_PARAMETERS_SIZE UNIFORM_ALIGN(sizeof(struct dk_pixel_parameters))
 #define UNIFORM_VERTEX_CONSTANTS 0x000
-#define UNIFORM_VERTEX_PARAMETERS 0xc00
-#define UNIFORM_PIXEL_PARAMETERS 0xd00
-#define UNIFORM_MEMORY_SIZE 0x1000
+#define UNIFORM_VERTEX_PARAMETERS (UNIFORM_VERTEX_CONSTANTS + UNIFORM_VERTEX_CONSTANTS_SIZE)
+#define UNIFORM_PIXEL_PARAMETERS (UNIFORM_VERTEX_PARAMETERS + UNIFORM_VERTEX_PARAMETERS_SIZE)
+#define UNIFORM_MEMORY_SIZE ((UNIFORM_PIXEL_PARAMETERS + UNIFORM_PIXEL_PARAMETERS_SIZE + DK_MEMBLOCK_ALIGNMENT - 1) & ~(uint32_t)(DK_MEMBLOCK_ALIGNMENT - 1))
 
 int host_dk_presenting;
 
@@ -185,6 +206,12 @@ static struct
 	/* the swapchain's size (swapchain_make) */
 	uint32_t screen_width, screen_height;
 	DkSwapchain swapchain;
+#ifdef __SWITCH2__
+	DkMemBlock guest_screen_memory;
+	DkImage guest_screen_images[SCREEN_IMAGES];
+	DkSwapchain guest_swapchain;
+	uint32_t guest_screen_width, guest_screen_height;
+#endif
 
 	struct image_block image_blocks[IMAGE_BLOCK_LIMIT];
 	int image_block_count;
@@ -194,6 +221,7 @@ static struct
 	/* the window's chunks, in commit order */
 	struct window_chunk window_chunks[WINDOW_CHUNKS];
 	int window_chunk_count;
+	int window_chunks_tried;
 	/* deko3d ends the program on a memory block it cannot make (DEKO3D.md),
 	so each chunk is tried as the probe tries it first, into a private
 	address space made for the asking */
@@ -241,6 +269,11 @@ static struct
 	struct dk_draw_state state;
 	int state_valid;
 	int state_dirty;
+	int viewport_dirty;
+	int scissor_dirty;
+	DkViewport last_viewport;
+	DkScissor last_scissor;
+	uint32_t upload_rollovers;
 	uint32_t vertex_shader, pixel_shader;
 	int shaders_dirty;
 	struct dk_vertex_format format;
@@ -273,9 +306,27 @@ static struct
 	uint32_t readback_width, readback_height, readback_pitch;
 } dk;
 
+#ifdef __SWITCH2__
+void warthog_dk_debug_callback(void *user_data, const char *context, DkResult result, const char *message);
+void warthog_log_set_presenting(bool presenting);
+#endif
 static void debug_callback(void *user, const char *context, DkResult result, const char *message)
 {
 	(void)user;
+#ifdef __SWITCH2__
+	warthog_dk_debug_callback(user, context, result, message);
+	if (result == DkResult_Success)
+	{
+		static unsigned nonfatal_said;
+		if (nonfatal_said < 8)
+		{
+			nonfatal_said++;
+			host_logf(HOST_LOG_WARN, "deko3d: %s: result %d: %s", context ? context : "?", (int)result,
+				message ? message : "");
+		}
+		return;
+	}
+#endif
 	host_logf(HOST_LOG_ERROR, "deko3d: %s: result %d: %s", context ? context : "?", (int)result,
 		message ? message : "");
 }
@@ -812,6 +863,9 @@ static int queue_faulted(void)
 	if (!dk.queue || !dkQueueIsInErrorState(dk.queue))
 		return 0;
 	dk.faulted = 1;
+#ifdef __SWITCH2__
+	warthog_dk_debug_callback(NULL, "queue_faulted", 0, "GPU queue is in an error state");
+#endif
 	trace.dump_pending = 1;
 	host_logf(HOST_LOG_ERROR, "deko3d: the GPU faulted (the queue is in an error state) by submission %u, frame %lu; "
 		"nothing more is drawn or presented", (unsigned)dk.serial, dk.frames_presented);
@@ -868,7 +922,12 @@ static void command_memory_begin(void)
 	dk.command_pieces = 0;
 	dk.command_rolled_bytes = 0;
 	dk.command_memory_low = 0;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	command_piece_add();
+#ifdef __SWITCH2__
+	/* Ampere retains descriptor cache entries across command lists. */
+	dkCmdBufBarrier(dk.commands, DkBarrier_None, DkInvalidateFlags_Descriptors);
+#endif
 }
 
 /* the bytes of command memory the frame has used, to the piece */
@@ -967,9 +1026,16 @@ static struct target *target_get(const struct dk_surface *surface)
 			(unsigned)surface->data);
 		return NULL;
 	}
+#ifdef __SWITCH2__
+	/* Ampere / Drako3D MemBlock registers memory without Maxwell CBC compression tags. */
+	layout_make(&layout, surface->kind == DK_SURFACE_DEPTH ? DkImageFormat_Z24S8 : DkImageFormat_RGBA8_Unorm,
+		DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine,
+		SURFACE_PIXEL_WIDTH(surface), SURFACE_PIXEL_HEIGHT(surface));
+#else
 	layout_make(&layout, surface->kind == DK_SURFACE_DEPTH ? DkImageFormat_Z24S8 : DkImageFormat_RGBA8_Unorm,
 		DkImageFlags_UsageRender | DkImageFlags_Usage2DEngine | (host_dk_no_compression ? 0 : DkImageFlags_HwCompression),
 		SURFACE_PIXEL_WIDTH(surface), SURFACE_PIXEL_HEIGHT(surface));
+#endif
 	if (!image_memory(&layout, &block, &offset))
 	{
 		host_logf(HOST_LOG_ERROR, "deko3d: no image memory for the %ux%u target at %08x",
@@ -994,6 +1060,7 @@ static pthread_mutex_t dk_lock = PTHREAD_MUTEX_INITIALIZER;
 static void textures_frame_begin(void);
 static void textures_initialize(void);
 static void visibility_initialize(void);
+static uint64_t slow_now_ns(void);
 
 /* waits for frame slot index's fence (under dk_lock), saying so in the log
 if the GPU takes more than two seconds: a stop with nothing said is what a
@@ -1001,6 +1068,9 @@ faulted GPU otherwise looks like */
 static void fence_wait_said(int index, const char *what)
 {
 	int said = 0;
+#ifdef __SWITCH2__
+	uint64_t started = slow_now_ns();
+#endif
 
 	render_where = what;
 	while (dkFenceWait(&dk.fences[index], 2000000000LL) != DkResult_Success)
@@ -1017,6 +1087,9 @@ static void fence_wait_said(int index, const char *what)
 	}
 	if (said)
 		host_logf(HOST_LOG_ERROR, "deko3d: %s: the GPU finished after all", what);
+#ifdef __SWITCH2__
+	switch2_perf_renderer_fence_wait((slow_now_ns() - started) / 1000);
+#endif
 }
 
 /* ---------- the slow frames' figures (host_sdl2.c's frame_statistics)
@@ -1181,6 +1254,7 @@ static void frame_begin(void)
 	dk.color = dk.depth = NULL;
 	/* the queue is not trusted to be as the draws were told: put it back */
 	dk.state_dirty = dk.shaders_dirty = dk.format_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	dk.uniforms_bound = 0;
 }
 
@@ -1190,6 +1264,26 @@ region. A stall, but a rare one, and the alternative ends the program. The
 upload and staging slices go on as they were: what the GPU has read of them is
 read by now, and what it has not is still ahead of the frame's own offsets. */
 static void commands_submit_partial(void);
+static void textures_rollover_reset(void);
+
+static void rebind_targets_and_dirty_state(void)
+{
+	if (dk.color || dk.depth)
+	{
+		DkImageView color_view, depth_view;
+		DkImageView const *colors[1] = { &color_view };
+
+		if (dk.color)
+			dkImageViewDefaults(&color_view, &dk.color->image);
+		if (dk.depth)
+			dkImageViewDefaults(&depth_view, &dk.depth->image);
+		dkCmdBufBindRenderTargets(dk.commands, colors, dk.color ? 1 : 0, dk.depth ? &depth_view : NULL);
+	}
+	dk.state_dirty = dk.shaders_dirty = dk.format_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
+	dk.uniforms_bound = 0;
+	textures_rollover_reset();
+}
 
 static void command_memory_roll(void)
 {
@@ -1213,8 +1307,44 @@ static void command_memory_roll(void)
 		host_logf(HOST_LOG_WARN, "deko3d: a frame filled its %u bytes of command memory; it is submitted and "
 			"waited for, and the frame goes on from the start", (unsigned)COMMAND_MEMORY_SIZE);
 	command_memory_begin();
+	rebind_targets_and_dirty_state();
 	dk.command_rolled_bytes = used;
 	profile.frame.rollovers++;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_rollover();
+#endif
+	profile_mark(trace.pass);
+}
+
+/* Submit what was recorded with the current upload slice, wait for the GPU
+to finish reading it, and restart the upload slice cleanly so draws never skip. */
+static void upload_memory_roll(void)
+{
+	if (dk.recorded)
+		commands_submit_partial();
+	pthread_mutex_lock(&dk_lock);
+	if (queue_faulted())
+		fences_forget();
+	if (dk.fence_pending[dk.frame])
+	{
+		fence_wait_said(dk.frame, "an upload memory rollover");
+		dk.fence_pending[dk.frame] = 0;
+		if (dk.fence_serial[dk.frame] > dk.serial_retired)
+			dk.serial_retired = dk.fence_serial[dk.frame];
+	}
+	pthread_mutex_unlock(&dk_lock);
+	if (!dk.upload_rollovers++)
+		host_logf(HOST_LOG_WARN, "deko3d: a frame filled its %u bytes of upload memory; submitting and "
+			"rolling upload slice", (unsigned)UPLOAD_SLICE_SIZE);
+	dk.upload_used = 0;
+	dk.upload_generation++;
+	dk.constants_gpu = 0;
+	command_memory_begin();
+	rebind_targets_and_dirty_state();
+	profile.frame.rollovers++;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_rollover();
+#endif
 	profile_mark(trace.pass);
 }
 
@@ -1230,6 +1360,13 @@ the way the probe tries it, because deko3d ends the program when it cannot
 make one. */
 static void chunk_block_make(struct window_chunk *chunk)
 {
+#ifdef __SWITCH2__
+	/* Switch 2 window chunks are mapped via svcMapMemory, which borrows the
+	   heap backing pages (stripping CPU permission on the source heap) while
+	   dkMemBlockCreate aborts via RaiseError if GPU registration refuses an
+	   alias mapping. Upload through dk.upload_memory instead. */
+	(void)chunk;
+#else
 	NvMap map;
 	iova_t address = 0;
 	Result result;
@@ -1271,6 +1408,7 @@ static void chunk_block_make(struct window_chunk *chunk)
 	chunk->gpu = dkMemBlockGetGpuAddr(chunk->block);
 	host_logf(HOST_LOG_INFO, "deko3d: window chunk %p is GPU address %010llx", (void *)(uintptr_t)chunk->address,
 		(unsigned long long)chunk->gpu);
+#endif
 }
 
 /* host_memory.c says a chunk of the window has been committed: noted here,
@@ -1301,16 +1439,15 @@ void host_dk_window_chunk_committed(uint64_t address, uint64_t size)
 the game thread. A chunk the console refuses is tried no more. */
 static void chunks_map(void)
 {
-	static int tried;
 	int count, index;
 
 	pthread_mutex_lock(&dk_lock);
 	count = dk.window_chunk_count;
 	pthread_mutex_unlock(&dk_lock);
 	/* (entries below count are not touched by other threads again) */
-	for (index = tried; index < count; index++)
+	for (index = dk.window_chunks_tried; index < count; index++)
 		chunk_block_make(&dk.window_chunks[index]);
-	tried = count;
+	dk.window_chunks_tried = count;
 }
 
 /* The GPU address of [address, address + size) of the window, for a draw
@@ -1374,6 +1511,9 @@ static DkGpuAddr upload_copy(const void *data, uint32_t size)
 	}
 	memcpy((char *)dk.upload_cpu + dk.frame * UPLOAD_SLICE_SIZE + offset, data, size);
 	dk.upload_used = offset + size;
+#ifdef __SWITCH2__
+	switch2_perf_renderer_upload(size);
+#endif
 	return dk.upload_gpu + dk.frame * UPLOAD_SLICE_SIZE + offset;
 }
 
@@ -1524,15 +1664,26 @@ int host_dk_window_taken(void)
 }
 
 /* the height host_dk_output_height last chose: 720 in handheld, 1080 docked */
+#ifdef __SWITCH2__
+static uint32_t output_height = SCREEN_FULL_HEIGHT;
+static uint32_t output_width = SCREEN_FULL_WIDTH;
+#else
 static uint32_t output_height = SCREEN_HEIGHT;
+#endif
 
 /* the guest's, as it chooses its screen's scale (d3d8_dk.c, between frames):
 the height presented at, 1080 while the console is docked and 720 in
 handheld. present remakes the swapchain when it changes */
 unsigned int host_dk_output_height(void)
 {
+#ifdef __SWITCH2__
+	u32 height;
+	nx2DisplaySize(NULL, &height);
+	return height;
+#else
 	output_height = appletGetOperationMode() == AppletOperationMode_Console ? SCREEN_FULL_HEIGHT : SCREEN_HEIGHT;
 	return output_height;
+#endif
 }
 
 /* the swapchain's images and the swapchain, at output_height */
@@ -1545,9 +1696,19 @@ static void swapchain_make(void)
 	int index;
 
 	dk.screen_height = output_height;
+#ifdef __SWITCH2__
+	dk.screen_width = output_width;
+#else
 	dk.screen_width = output_height == SCREEN_FULL_HEIGHT ? SCREEN_FULL_WIDTH : SCREEN_WIDTH;
+#endif
 	layout_make(&layout, DkImageFormat_RGBA8_Unorm,
-		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine | DkImageFlags_HwCompression,
+		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine
+#ifndef __SWITCH2__
+		| DkImageFlags_HwCompression
+#else
+		/* VI2 swapchain images cannot use hardware compression. */
+#endif
+		,
 		dk.screen_width, dk.screen_height);
 	image_size = (uint32_t)((dkImageLayoutGetSize(&layout) + dkImageLayoutGetAlignment(&layout) - 1) &
 		~(uint64_t)(dkImageLayoutGetAlignment(&layout) - 1));
@@ -1559,6 +1720,9 @@ static void swapchain_make(void)
 	}
 	dkSwapchainMakerDefaults(&swapchain_maker, dk.device, nwindowGetDefault(), screen_images, SCREEN_IMAGES);
 	dk.swapchain = dkSwapchainCreate(&swapchain_maker);
+#ifdef __SWITCH2__
+	nx2DisplayReapply();
+#endif
 }
 
 /* the swapchain made again at output_height, once the GPU has finished with
@@ -1571,8 +1735,70 @@ static void swapchain_remake(void)
 	dkSwapchainDestroy(dk.swapchain);
 	dkMemBlockDestroy(dk.screen_memory);
 	swapchain_make();
+	#ifdef __SWITCH2__
+	(void)nx2DisplayReapply();
+	#endif
 	host_logf(HOST_LOG_INFO, "deko3d: presenting at %ux%u", (unsigned)dk.screen_width, (unsigned)dk.screen_height);
 }
+
+#ifdef __SWITCH2__
+static int initialize(void);
+
+int host_dk_gameshare_open(void *window, int width, int height)
+{
+	DkSwapchainMaker maker;
+	DkImageLayout layout;
+	DkImage const *images[SCREEN_IMAGES];
+	uint32_t image_size;
+
+	if (!dk.ready && !initialize())
+		return 0;
+	if (dk.guest_swapchain || !window || width <= 0 || height <= 0)
+		return 0;
+	layout_make(&layout, DkImageFormat_RGBA8_Unorm,
+		DkImageFlags_UsageRender | DkImageFlags_UsagePresent | DkImageFlags_Usage2DEngine,
+		(uint32_t)width, (uint32_t)height);
+	image_size = (uint32_t)((dkImageLayoutGetSize(&layout) +
+		dkImageLayoutGetAlignment(&layout) - 1) &
+		~(uint64_t)(dkImageLayoutGetAlignment(&layout) - 1));
+	dk.guest_screen_memory = memory_block(SCREEN_IMAGES * image_size,
+		DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image, NULL);
+	if (!dk.guest_screen_memory)
+		return 0;
+	for (unsigned i = 0; i < SCREEN_IMAGES; i++) {
+		dkImageInitialize(&dk.guest_screen_images[i], &layout,
+			dk.guest_screen_memory, i * image_size);
+		images[i] = &dk.guest_screen_images[i];
+	}
+	dkSwapchainMakerDefaults(&maker, dk.device, (NWindow *)window,
+		images, SCREEN_IMAGES);
+	dk.guest_swapchain = dkSwapchainCreate(&maker);
+	if (!dk.guest_swapchain) {
+		dkMemBlockDestroy(dk.guest_screen_memory);
+		dk.guest_screen_memory = NULL;
+		return 0;
+	}
+	dk.guest_screen_width = (uint32_t)width;
+	dk.guest_screen_height = (uint32_t)height;
+	host_logf(HOST_LOG_INFO, "deko3d: GameShare guest display at %ux%u",
+		(unsigned)width, (unsigned)height);
+	return 1;
+}
+
+void host_dk_gameshare_close(void)
+{
+	if (!dk.guest_swapchain)
+		return;
+	if (dk.queue)
+		dkQueueWaitIdle(dk.queue);
+	dkSwapchainDestroy(dk.guest_swapchain);
+	dk.guest_swapchain = NULL;
+	if (dk.guest_screen_memory)
+		dkMemBlockDestroy(dk.guest_screen_memory);
+	dk.guest_screen_memory = NULL;
+	dk.guest_screen_width = dk.guest_screen_height = 0;
+}
+#endif
 
 static int initialize(void)
 {
@@ -1594,10 +1820,14 @@ static int initialize(void)
 	dk.commands = dkCmdBufCreate(&command_maker);
 	gpu_timing_initialize();
 
+#ifdef __SWITCH2__
+	nx2DisplaySize(&output_width, &output_height);
+#endif
 	swapchain_make();
 	host_logf(HOST_LOG_INFO, "deko3d: device ready, presenting at %ux%u", (unsigned)dk.screen_width,
 		(unsigned)dk.screen_height);
 
+#ifndef __SWITCH2__
 	/* the window's committed chunks, GPU-mapped (host_memory.c reports the
 	chunks; the GPU checks go as the probe's did) */
 	nvMapInit();
@@ -1605,6 +1835,7 @@ static int initialize(void)
 		dk.nv_ready = 1;
 	else
 		host_logf(HOST_LOG_ERROR, "deko3d: no test address space for the window's chunks");
+#endif
 	dk.ready = 1;
 	chunks_map();
 
@@ -1692,6 +1923,7 @@ static void targets_bind(const struct dk_command_targets *command)
 	}
 	/* (the draws' viewport and scissor go back at the next draw) */
 	dk.state_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 }
 
 static void clear(const struct dk_command_clear *command)
@@ -1742,6 +1974,7 @@ static void clear(const struct dk_command_clear *command)
 	window, and the viewport is set to it as the scissor is; the next draw
 	puts both back (state_dirty). */
 	dk.state_dirty = 1;
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	for (index = 0; index < command->rectangle_count; index++)
 	{
 		const uint32_t *rectangle = command->rectangles[index];
@@ -1787,8 +2020,10 @@ static int readback_make(uint32_t width, uint32_t height)
 	maker.pitchStride = pitch;
 	dkImageLayoutInitialize(&layout, &maker);
 	size = (uint32_t)dkImageLayoutGetSize(&layout);
-	if (dk.readback_memory)
+	if (dk.readback_memory) {
+		queue_wait_idle();
 		dkMemBlockDestroy(dk.readback_memory);
+	}
 	dk.readback_memory = memory_block(size, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached |
 		DkMemBlockFlags_Image, NULL);
 	dk.readback_size = dk.readback_memory ? size : 0;
@@ -1807,7 +2042,14 @@ static void present(const struct dk_command_present *command)
 	struct target *back_buffer = target_get(&command->back_buffer);
 	struct target *screenshot = NULL;
 	struct trace_event *event = trace_add(DK_COMMAND_PRESENT);
+#ifdef __SWITCH2__
+	uint64_t frame_started_ns = slow_now_ns();
+	switch2_gameshare_update();
+#endif
 	int slot;
+#ifdef __SWITCH2__
+	int guest_slot = -1;
+#endif
 
 	event->a[0] = command->back_buffer.data;
 	event->a[1] = SURFACE_PIXEL_WIDTH(&command->back_buffer) | SURFACE_PIXEL_HEIGHT(&command->back_buffer) << 16;
@@ -1827,7 +2069,12 @@ static void present(const struct dk_command_present *command)
 		dk.recorded = 0;
 		return;
 	}
+#ifdef __SWITCH2__
+	nx2DisplaySize(&output_width, &output_height);
+	if (switch2_lifecycle_size_changed(output_width, output_height, dk.screen_width, dk.screen_height))
+#else
 	if (output_height != dk.screen_height)
+#endif
 		swapchain_remake();
 	{
 		uint64_t waited = slow_now_ns();
@@ -1848,30 +2095,61 @@ static void present(const struct dk_command_present *command)
 	dkCmdBufBindRenderTargets(dk.commands, screen_views, 1, NULL);
 	dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
 	dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+	dk.viewport_dirty = dk.scissor_dirty = 1;
 	dkCmdBufClearColorFloat(dk.commands, 0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
 	if (back_buffer)
 	{
 		/* letterboxed to the back buffer's shape */
 		uint32_t source_width = SURFACE_PIXEL_WIDTH(&back_buffer->surface);
 		uint32_t source_height = SURFACE_PIXEL_HEIGHT(&back_buffer->surface);
+#ifdef __SWITCH2__
+		struct switch2_present_route route;
+		uint32_t width, height;
+#else
 		uint32_t width = dk.screen_width, height = dk.screen_width * source_height / source_width;
+#endif
 		DkImageView source;
 		DkImageRect from = { 0, 0, 0, source_width, source_height, 1 };
 		DkImageRect to;
 
+#ifdef __SWITCH2__
+		switch2_splitscreen_get_present_route(&route, dk.screen_width, dk.screen_height);
+		route.destination = switch2_splitscreen_clamp(route.destination,
+			dk.screen_width, dk.screen_height);
+		width = route.destination.width;
+		height = route.destination.width * source_height / source_width;
+#endif
 		if (height > dk.screen_height)
 		{
+#ifdef __SWITCH2__
+			height = route.destination.height;
+			width = route.destination.height * source_width / source_height;
+#else
 			height = dk.screen_height;
 			width = dk.screen_height * source_width / source_height;
+#endif
 		}
+#ifdef __SWITCH2__
+		if (width > route.destination.width)
+			width = route.destination.width;
+		if (height > route.destination.height)
+			height = route.destination.height;
+		to.x = route.destination.x + (route.destination.width - width) / 2;
+		to.y = route.destination.y + (route.destination.height - height) / 2;
+#else
 		to.x = (dk.screen_width - width) / 2;
 		to.y = (dk.screen_height - height) / 2;
+#endif
 		to.z = 0;
 		to.width = width;
 		to.height = height;
 		to.depth = 1;
 		dkImageViewDefaults(&source, &back_buffer->image);
+#ifdef __SWITCH2__
+		barrier(DkBarrier_Fragments, switch2_drako3d_copy_invalidate_flags());
+#else
 		barrier(DkBarrier_Fragments, 0);
+#endif
 		if (command->screenshot && readback_make(source_width, source_height))
 		{
 			DkImageView readback;
@@ -1881,8 +2159,39 @@ static void present(const struct dk_command_present *command)
 			screenshot = back_buffer;
 		}
 		dkCmdBufBlitImage(dk.commands, &source, &from, &screen_view, &to, DkBlitFlag_FilterLinear, 0);
+#ifdef __SWITCH2__
+		/* A SeparateViews session gets the same complete player-1 frame on
+		   its named display.  The guest swapchain is uncompressed because
+		   VI2 does not accept Maxwell-style hardware compression. */
+		if (dk.guest_swapchain && nx2GameShareSeparateActive()) {
+			DkImageView guest_view;
+			DkImageView const *guest_views[1] = { &guest_view };
+			DkScissor guest_scissor = { 0, 0, dk.guest_screen_width,
+				dk.guest_screen_height };
+			DkViewport guest_viewport = { 0.0f, 0.0f,
+				(float)dk.guest_screen_width, (float)dk.guest_screen_height,
+				0.0f, 1.0f };
+			guest_slot = dkQueueAcquireImage(dk.queue, dk.guest_swapchain);
+			dkImageViewDefaults(&guest_view,
+				&dk.guest_screen_images[guest_slot]);
+			dkCmdBufBindRenderTargets(dk.commands, guest_views, 1, NULL);
+			dkCmdBufSetViewports(dk.commands, 0, &guest_viewport, 1);
+			dkCmdBufSetScissors(dk.commands, 0, &guest_scissor, 1);
+			DkImageRect guest_to = { 0, 0, 0, dk.guest_screen_width,
+				dk.guest_screen_height, 1 };
+			dkCmdBufBlitImage(dk.commands, &source, &from, &guest_view,
+				&guest_to, DkBlitFlag_FilterLinear, 0);
+		}
+		/* Drako3D's postSubmitFlush invalidates caches without a full barrier;
+		   ensure the 2D blit finishes reading back_buffer before next frame's 3D clear. */
+		barrier(DkBarrier_Full, 0);
+#endif
 	}
 	command_done(event);
+#ifdef __SWITCH2__
+	switch2_splitscreen_record_frame(switch2_splitscreen_active_viewports(),
+		slow_now_ns() - frame_started_ns);
+#endif
 	profile_frame_end();
 	commands_submit();
 	if (capture.recording && dk.frame == capture.slot)
@@ -1916,10 +2225,22 @@ static void present(const struct dk_command_present *command)
 		}
 	}
 	dkQueuePresentImage(dk.queue, dk.swapchain, slot);
+#ifdef __SWITCH2__
+	if (guest_slot >= 0)
+		dkQueuePresentImage(dk.queue, dk.guest_swapchain, guest_slot);
+#endif
 	slow.presents++;
 	host_dk_presenting = 1;
 	if (++dk.frames_presented == 1)
+	{
+#ifdef __SWITCH2__
+		host_logf(HOST_LOG_INFO, "deko3d: first frame presented (%ux%u @ %d Hz)", (unsigned)dk.screen_width,
+			(unsigned)dk.screen_height, nx2DisplayRefreshRate());
+		warthog_log_set_presenting(true);
+#else
 		host_logf(HOST_LOG_INFO, "deko3d: first frame presented");
+#endif
+	}
 	/* (the largest frame's command memory, to a piece, for choosing its size
 	from what maps take) */
 	if (dk.frames_presented % 60 == 0)
@@ -1935,6 +2256,18 @@ static void present(const struct dk_command_present *command)
 			host_logf(HOST_LOG_INFO, "deko3d: GPU busy %.2f ms a frame on average, %.2f ms the longest (%u frames)",
 				(double)dk.gpu_busy_total_ns / dk.gpu_frames / 1e6, (double)dk.gpu_busy_peak_ns / 1e6,
 				(unsigned)dk.gpu_frames);
+#ifdef __SWITCH2__
+		{
+			struct switch2_splitscreen_stats split_stats;
+			switch2_splitscreen_get_stats(&split_stats);
+			if (split_stats.frames)
+				host_logf(HOST_LOG_INFO, "split-screen: %u viewports, %.2f ms a frame on average, %.2f ms the longest (%llu frames)",
+					(unsigned)split_stats.active_viewports,
+					(double)split_stats.total_ns / split_stats.frames / 1e6,
+					(double)split_stats.maximum_ns / 1e6,
+					(unsigned long long)split_stats.frames);
+		}
+#endif
 		dk.gpu_busy_total_ns = dk.gpu_busy_peak_ns = 0;
 		dk.gpu_frames = 0;
 		dk.command_peak_bytes = 0;
@@ -2034,6 +2367,7 @@ static struct
 	uint32_t stage_sampler[4];
 	int stages_dirty;
 	int descriptors_bound;
+	int descriptors_dirty;
 	/* texels were written since the last barrier, or draws were recorded
 	since the last one (a texture rewritten in place waits for them) */
 	int written_unfenced;
@@ -2473,6 +2807,10 @@ static int texture_make(struct texture *texture, const struct dk_command_texture
 			view.swizzle[channel] = (DkImageSwizzle)(DkImageSwizzle_Red + ((command->swizzle >> (8 * channel)) & 3));
 	}
 	dkImageDescriptorInitialize(&descriptors[texture->slot], &view, false, false);
+#ifdef __SWITCH2__
+	/* Batch descriptor cache invalidations until draws fence or apply textures. */
+	tex.descriptors_dirty = 1;
+#endif
 	texture->swizzle = command->swizzle;
 	texture->kind = command->kind;
 	texture->format = command->format;
@@ -2498,7 +2836,12 @@ static void textures_fence(int before_writes)
 	}
 	if (!tex.written_unfenced)
 		return;
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, DkInvalidateFlags_Descriptors | switch2_drako3d_copy_invalidate_flags());
+	tex.descriptors_dirty = 0;
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
+#endif
 	tex.written_unfenced = 0;
 	tex.draws_unfenced = 0;
 }
@@ -2507,22 +2850,22 @@ static void textures_fence(int before_writes)
 out of its image, waiting for the GPU, and says where they differ from the
 game's bytes; whether the copy into the image is right, or the fault is in
 how the image is sampled */
+static DkMemBlock texture_verify_readback;
 static void texture_verify(struct texture *texture, const struct dk_command_texture *command)
 {
-	static DkMemBlock readback;
 	static void *readback_cpu;
 	static DkGpuAddr readback_gpu;
 	static unsigned long verified, mismatched;
 	uint32_t faces = command->kind == DK_TEXTURE_CUBE ? 6 : 1;
 	uint32_t face, level;
 
-	if (!readback)
+	if (!texture_verify_readback)
 	{
-		readback = memory_block(STAGING_SLICE_SIZE, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, NULL);
-		if (!readback)
+		texture_verify_readback = memory_block(STAGING_SLICE_SIZE, DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached, NULL);
+		if (!texture_verify_readback)
 			return;
-		readback_cpu = dkMemBlockGetCpuAddr(readback);
-		readback_gpu = dkMemBlockGetGpuAddr(readback);
+		readback_cpu = dkMemBlockGetCpuAddr(texture_verify_readback);
+		readback_gpu = dkMemBlockGetGpuAddr(texture_verify_readback);
 	}
 	if (command->source_bytes > STAGING_SLICE_SIZE)
 		return;
@@ -2951,6 +3294,11 @@ static void hud_image_receive(const struct dk_command_hud_image *command)
 		return;
 	}
 	source = dkMemBlockGetGpuAddr(memory);
+#ifdef __SWITCH2__
+	/* HUD memory is CPU-cached; clean again immediately before the copy in
+	   case the decode worker and render thread used different cores. */
+	armDCacheClean(levels.texels, levels.bytes);
+#endif
 	textures_fence(1);
 	for (level = 0; level < levels.levels; level++)
 	{
@@ -3062,6 +3410,10 @@ static uint32_t sampler_slot(const struct dk_sampler *sampler)
 	index = tex.sampler_count++;
 	tex.samplers[index] = *sampler;
 	dkSamplerDescriptorInitialize(&descriptors[index], &made);
+#ifdef __SWITCH2__
+	/* Batch descriptor cache invalidations until draws fence or apply textures. */
+	tex.descriptors_dirty = 1;
+#endif
 	return index;
 }
 
@@ -3164,7 +3516,11 @@ static struct target *target_sampled(uint32_t data)
 	}
 	if (best->drawn)
 	{
-		barrier(DkBarrier_Fragments, DkInvalidateFlags_Image);
+		barrier(DkBarrier_Fragments, DkInvalidateFlags_Image
+#ifdef __SWITCH2__
+			| switch2_drako3d_copy_invalidate_flags()
+#endif
+		);
 		best->drawn = 0;
 	}
 	tex.targets_sampled = 1;
@@ -3316,7 +3672,11 @@ static struct composite *composite_sampled(uint32_t data, uint32_t levels)
 	/* the targets' draws done, then each level copied (the 2D engine), the
 	ones not drawn halved from the one above, and the copies done before
 	the draws that sample them */
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Fragments, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Fragments, 0);
+#endif
 	for (level = 0; level < levels; level++)
 	{
 		DkImageView source, destination;
@@ -3346,7 +3706,11 @@ static struct composite *composite_sampled(uint32_t data, uint32_t levels)
 			dkCmdBufBlitImage(dk.commands, &source, &from, &destination, &to, DkBlitFlag_FilterLinear, 0);
 		}
 	}
-	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+	barrier(DkBarrier_Full, DkInvalidateFlags_Image
+#ifdef __SWITCH2__
+		| switch2_drako3d_copy_invalidate_flags()
+#endif
+	);
 	composite->copied = 1;
 	composite->rendered_levels = rendered;
 	composite->stamp = dk.target_clock;
@@ -3399,7 +3763,7 @@ static struct
 	int present;
 } picture;
 
-int host_dk_picture(unsigned int rgba, unsigned int width, unsigned int height)
+int host_dk_picture(dk_addr_t rgba, unsigned int width, unsigned int height)
 {
 	uint64_t bytes = (uint64_t)width * height * 4;
 	struct picture_slot *slot;
@@ -3489,12 +3853,20 @@ static void picture_draw(const struct dk_command_picture *command)
 	dkImageViewDefaults(&from_view, &picture.image);
 	copy.addr = source;
 	dkCmdBufCopyBufferToImage(dk.commands, &copy, &from_view, &from, 0);
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+#endif
 	dkImageViewDefaults(&to_view, &destination->image);
 	to.width = SURFACE_PIXEL_WIDTH(&destination->surface);
 	to.height = SURFACE_PIXEL_HEIGHT(&destination->surface);
 	dkCmdBufBlitImage(dk.commands, &from_view, &from, &to_view, &to, DkBlitFlag_FilterLinear, 0);
+#ifdef __SWITCH2__
+	barrier(DkBarrier_Full, switch2_drako3d_copy_invalidate_flags());
+#else
 	barrier(DkBarrier_Full, DkInvalidateFlags_Image);
+#endif
 	targets_sampled_forget();
 	tex.stages_dirty = 1;
 	/* (the latest image at its data, which a stage samples: target_sampled) */
@@ -3572,6 +3944,13 @@ static int textures_apply(void)
 	dummy_make();
 	/* what was written since the last barrier is made visible to this draw */
 	textures_fence(0);
+#ifdef __SWITCH2__
+	if (tex.descriptors_dirty)
+	{
+		barrier(DkBarrier_None, DkInvalidateFlags_Descriptors);
+		tex.descriptors_dirty = 0;
+	}
+#endif
 	if (!tex.stages_dirty)
 		return 1;
 	for (stage = 0; stage < 4; stage++)
@@ -3617,10 +3996,18 @@ static int textures_apply(void)
 /* the start of a frame: the staging slice is free again behind the frame's
 fence, the descriptor sets are bound anew, and what the GPU has finished with
 is let go */
+static void textures_rollover_reset(void)
+{
+	tex.descriptors_bound = 0;
+	tex.stages_dirty = 1;
+	tex.descriptors_dirty = 0;
+}
+
 static void textures_frame_begin(void)
 {
 	tex.staging_used = 0;
 	tex.descriptors_bound = 0;
+	tex.descriptors_dirty = 0;
 	if (dk.ready)
 		releases_collect();
 }
@@ -3797,7 +4184,7 @@ static void constants_receive(const struct dk_command_constants *command)
 {
 	if (!dk.uniform_memory || command->first >= 192 || command->count > 192 - command->first)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, sizeof(struct dk_vertex_constants),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, UNIFORM_VERTEX_CONSTANTS_SIZE,
 		command->first * 4 * sizeof(float), command->count * 4 * sizeof(float), command->data);
 }
 
@@ -3805,7 +4192,7 @@ static void vertex_parameters_receive(const struct dk_command_vertex_parameters 
 {
 	if (!dk.uniform_memory)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, sizeof(struct dk_vertex_parameters),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, UNIFORM_VERTEX_PARAMETERS_SIZE,
 		0, sizeof(command->parameters), &command->parameters);
 }
 
@@ -3813,7 +4200,7 @@ static void pixel_parameters_receive(const struct dk_command_pixel_parameters *c
 {
 	if (!dk.uniform_memory)
 		return;
-	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, sizeof(struct dk_pixel_parameters),
+	dkCmdBufPushConstants(dk.commands, dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, UNIFORM_PIXEL_PARAMETERS_SIZE,
 		0, sizeof(command->parameters), &command->parameters);
 }
 
@@ -3988,8 +4375,18 @@ static int state_apply(void)
 	/* After the rasterizer state, and on every draw: binding a target left
 	the scissor as the whole target. The window is put back so a triangle the
 	clipper does not take cannot paint the other split-screen pane. */
-	dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
-	dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+	if (dk.viewport_dirty || memcmp(&viewport, &dk.last_viewport, sizeof(viewport)) != 0)
+	{
+		dkCmdBufSetViewports(dk.commands, 0, &viewport, 1);
+		dk.last_viewport = viewport;
+		dk.viewport_dirty = 0;
+	}
+	if (dk.scissor_dirty || memcmp(&scissor, &dk.last_scissor, sizeof(scissor)) != 0)
+	{
+		dkCmdBufSetScissors(dk.commands, 0, &scissor, 1);
+		dk.last_scissor = scissor;
+		dk.scissor_dirty = 0;
+	}
 	return 1;
 }
 
@@ -4002,11 +4399,11 @@ static int shaders_apply(void)
 	if (!dk.uniforms_bound && dk.uniform_memory)
 	{
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Vertex, DK_BINDING_VERTEX_CONSTANTS,
-			dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, sizeof(struct dk_vertex_constants));
+			dk.uniform_gpu + UNIFORM_VERTEX_CONSTANTS, UNIFORM_VERTEX_CONSTANTS_SIZE);
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Vertex, DK_BINDING_VERTEX_PARAMETERS,
-			dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, sizeof(struct dk_vertex_parameters));
+			dk.uniform_gpu + UNIFORM_VERTEX_PARAMETERS, UNIFORM_VERTEX_PARAMETERS_SIZE);
 		dkCmdBufBindUniformBuffer(dk.commands, DkStage_Fragment, DK_BINDING_PIXEL_PARAMETERS,
-			dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, sizeof(struct dk_pixel_parameters));
+			dk.uniform_gpu + UNIFORM_PIXEL_PARAMETERS, UNIFORM_PIXEL_PARAMETERS_SIZE);
 		dk.uniforms_bound = 1;
 	}
 	if (!dk.shaders_dirty)
@@ -4090,6 +4487,40 @@ static void draw(const struct dk_command_draw *command)
 		event->a[0] |= 1u << 24;
 		draw_problem("what it needs is not in place");
 		return;
+	}
+	if (dk.upload_memory)
+	{
+		uint32_t align_pad = UPLOAD_ALIGNMENT - 1;
+		uint32_t needed = 0;
+		uint32_t next_offset = (dk.upload_used + align_pad) & ~align_pad;
+		uint32_t stream_idx;
+
+		for (stream_idx = 0; stream_idx < streams; stream_idx++)
+		{
+			uint32_t sz = command->inline_bytes ? command->inline_bytes : command->streams[stream_idx][1];
+
+			if (sz > UPLOAD_SLICE_SIZE - needed)
+			{
+				needed = UPLOAD_SLICE_SIZE + 1;
+				break;
+			}
+			needed += (sz + align_pad) & ~align_pad;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && dk.vertex.has_constants &&
+			(dk.constants_generation != dk.upload_generation || !dk.constants_gpu))
+		{
+			uint32_t const_sz = ((uint32_t)sizeof(dk.format.constants) + align_pad) & ~align_pad;
+
+			needed = (const_sz <= UPLOAD_SLICE_SIZE - needed) ? needed + const_sz : UPLOAD_SLICE_SIZE + 1;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && command->index_address)
+		{
+			uint32_t idx_sz = ((uint32_t)(command->count * sizeof(uint16_t)) + align_pad) & ~align_pad;
+
+			needed = (idx_sz <= UPLOAD_SLICE_SIZE - needed) ? needed + idx_sz : UPLOAD_SLICE_SIZE + 1;
+		}
+		if (needed <= UPLOAD_SLICE_SIZE && next_offset + needed > UPLOAD_SLICE_SIZE)
+			upload_memory_roll();
 	}
 	if (!state_apply())
 	{
@@ -4467,6 +4898,10 @@ static struct
 		uint32_t capacity, size;
 	} streams[RENDER_QUEUE];
 } render_queue = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER };
+#ifdef __SWITCH2__
+static pthread_t render_thread_id, watchdog_thread_id;
+static int render_stop, watchdog_started;
+#endif
 
 /* (read without the lock: the watchdog's look) */
 static uint32_t render_queued(void)
@@ -4561,7 +4996,15 @@ static void *render_watchdog(void *unused)
 	(void)unused;
 	for (;;)
 	{
+#ifdef __SWITCH2__
+		for (int i = 0; i < 10; i++)
+		{
+			if (__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE)) return NULL;
+			svcSleepThread(100000000LL);
+		}
+#else
 		svcSleepThread(1000000000LL);
+#endif
 		watchdog_lock_and_gpu();
 		if (render_progress != seen || !render_queued())
 		{
@@ -4585,21 +5028,41 @@ static void *render_watchdog(void *unused)
 static void *render_thread(void *unused)
 {
 	(void)unused;
+#ifdef __SWITCH2__
+	host_thread_place_on_render_core();
+#else
 	host_thread_place_on_helper_core();
+#endif
 	render_handle = threadGetCurHandle();
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&watchdog_thread_id, NULL, render_watchdog, NULL) == 0)
+			watchdog_started = 1;
+#else
 		pthread_t watchdog;
 
 		if (pthread_create(&watchdog, NULL, render_watchdog, NULL) == 0)
 			pthread_detach(watchdog);
+#endif
 	}
 	for (;;)
 	{
 		unsigned index;
 
 		pthread_mutex_lock(&render_queue.lock);
-		while (!render_queue.count)
+		while (!render_queue.count
+#ifdef __SWITCH2__
+			&& !__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE)
+#endif
+		)
 			pthread_cond_wait(&render_queue.work, &render_queue.lock);
+#ifdef __SWITCH2__
+		if (__atomic_load_n(&render_stop, __ATOMIC_ACQUIRE))
+		{
+			pthread_mutex_unlock(&render_queue.lock);
+			break;
+		}
+#endif
 		index = render_queue.head;
 		pthread_mutex_unlock(&render_queue.lock);
 		render_where = "running a stream";
@@ -4622,20 +5085,28 @@ be made (the stream is then run on the game thread) */
 static int render_thread_start(void)
 {
 	pthread_attr_t attributes;
+#ifndef __SWITCH2__
 	pthread_t thread;
+#endif
 
 	if (render_queue.started || render_queue.failed)
 		return render_queue.started;
 	pthread_attr_init(&attributes);
 	pthread_attr_setstacksize(&attributes, RENDER_THREAD_STACK);
+#ifdef __SWITCH2__
+	if (pthread_create(&render_thread_id, &attributes, render_thread, NULL) != 0)
+#else
 	if (pthread_create(&thread, &attributes, render_thread, NULL) != 0)
+#endif
 	{
 		host_logf(HOST_LOG_ERROR, "deko3d: the render thread could not be made; the game thread runs the commands");
 		render_queue.failed = 1;
 	}
 	else
 	{
+#ifndef __SWITCH2__
 		pthread_detach(thread);
+#endif
 		render_queue.started = 1;
 		host_logf(HOST_LOG_INFO, "deko3d: a render thread runs the commands (%d streams queued at most)", RENDER_QUEUE);
 	}
@@ -4654,7 +5125,69 @@ static void render_queue_drain(void)
 	pthread_mutex_unlock(&render_queue.lock);
 }
 
-void host_dk_submit(uint32_t commands, uint32_t size)
+#ifdef __SWITCH2__
+void host_dk_shaders_shutdown(void);
+void host_dk_hud_shutdown(void);
+void host_dk_compiler_shutdown(void);
+
+void host_dk_shutdown(void)
+{
+	unsigned i;
+
+	if (render_queue.started)
+	{
+		render_queue_drain();
+		pthread_mutex_lock(&render_queue.lock);
+		__atomic_store_n(&render_stop, 1, __ATOMIC_RELEASE);
+		pthread_cond_broadcast(&render_queue.work);
+		pthread_mutex_unlock(&render_queue.lock);
+		pthread_join(render_thread_id, NULL);
+		if (watchdog_started) pthread_join(watchdog_thread_id, NULL);
+		render_queue.started = 0;
+	}
+	host_dk_hud_shutdown();
+	if (dk.queue) dkQueueWaitIdle(dk.queue);
+	host_dk_gameshare_close();
+	host_dk_shaders_shutdown();
+	host_dk_compiler_shutdown();
+	if (!dk.device) return;
+	if (dk.commands) dkCmdBufDestroy(dk.commands);
+	if (dk.timing_commands) dkCmdBufDestroy(dk.timing_commands);
+	if (dk.swapchain) dkSwapchainDestroy(dk.swapchain);
+	nwindowReleaseBuffers(nwindowGetDefault());
+	if (dk.queue) dkQueueDestroy(dk.queue);
+	for (i = 0; i < hud_source_count; i++)
+	{
+		if (hud_sources[i].memory) dkMemBlockDestroy(hud_sources[i].memory);
+		free(hud_sources[i].texels);
+	}
+	for (i = 0; i < (unsigned)dk.window_chunk_count; i++)
+		if (dk.window_chunks[i].block) dkMemBlockDestroy(dk.window_chunks[i].block);
+	for (i = 0; i < (unsigned)dk.image_block_count; i++)
+		if (dk.image_blocks[i].memory) dkMemBlockDestroy(dk.image_blocks[i].memory);
+	for (i = 0; i < tex.block_count; i++)
+		if (tex.blocks[i].memory) dkMemBlockDestroy(tex.blocks[i].memory);
+	DkMemBlock blocks[] = { dk.command_memory, dk.timing_memory, dk.screen_memory,
+		dk.upload_memory, dk.uniform_memory, dk.readback_memory, tex.image_descriptors,
+		tex.sampler_descriptors, tex.staging_memory, trace.memory, profile.memory,
+		capture.memory, visibility_memory, texture_verify_readback };
+	for (i = 0; i < sizeof(blocks) / sizeof(blocks[0]); i++)
+		if (blocks[i]) dkMemBlockDestroy(blocks[i]);
+	if (dk.nv_ready) nvAddressSpaceClose(&dk.test_address_space);
+	dkDeviceDestroy(dk.device);
+#ifndef __SWITCH2__
+	if (dk.ready) nvMapExit();
+#endif
+	free(trace.events);
+	for (i = 0; i < PICTURE_SLOTS; i++) free(picture.slots[i].data);
+	for (i = 0; i < RENDER_QUEUE; i++) free(render_queue.streams[i].data);
+	host_dk_presenting = 0;
+	warthog_log_set_presenting(false);
+	memset(&dk, 0, sizeof(dk));
+}
+#endif
+
+void host_dk_submit(dk_addr_t commands, uint32_t size)
 {
 	const unsigned char *at = (const unsigned char *)(uintptr_t)commands;
 	unsigned index;

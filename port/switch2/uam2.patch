@@ -1,0 +1,160 @@
+diff --git a/include/uam2rt.h b/include/uam2rt.h
+index a900942..00c0676 100644
+--- a/include/uam2rt.h
++++ b/include/uam2rt.h
+@@ -31,6 +31,11 @@ void* uam2rt_compile_spirv(const uint32_t* words, size_t num_words, Uam2rtStage
+ 	const char* entrypoint, const Uam2rtSpecConst* spec, uint32_t num_spec,
+ 	size_t* out_size, char** out_log);
+ 
++
++// Returns a DKSH image allocated with malloc, compiled from GLSL source
++void* uam2rt_compile_glsl(const char* source, Uam2rtStage stage,
++	size_t* out_size, char** out_log);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/meson.build b/meson.build
+index 9e6baa2..9e1367e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -30,7 +30,7 @@ mesa_options = [
+ 
+ if runtime
+ 	mesa_options += [
+-		'opengl=false',
++		'opengl=true',
+ 		'shader-cache=disabled',
+ 		'spirv-tools=disabled',
+ 		'zlib=disabled',
+@@ -61,17 +61,13 @@ mesa_incs = [
+ 	mesa.get_variable('inc_gallium_aux'),
+ ]
+ 
+-if runtime
+-	mesa_deps += declare_dependency(include_directories: mesa_incs)
+-else
+-	mesa_deps += [
+-		mesa.get_variable('idep_libglsl'),
+-		declare_dependency(
+-			include_directories: mesa_incs + mesa.get_variable('inc_glsl'),
+-			link_with: mesa.get_variable('libglsl_standalone'),
+-		),
+-	]
+-endif
++mesa_deps += [
++	mesa.get_variable('idep_libglsl'),
++	declare_dependency(
++		include_directories: mesa_incs + mesa.get_variable('inc_glsl'),
++		link_with: mesa.get_variable('libglsl_standalone'),
++	),
++]
+ 
+ mesa_args = mesa.get_variable('pre_args') + [
+ 	'-DPACKAGE_STRING="@0@ @1@"'.format(meson.project_name(), meson.project_version()),
+diff --git a/source/compile.c b/source/compile.c
+index df789c8..b310ac9 100644
+--- a/source/compile.c
++++ b/source/compile.c
+@@ -15,16 +15,12 @@ void uam2_init(void)
+ {
+ 	glsl_type_singleton_init_or_ref();
+ 	s_nak = nak_compiler_create(&uam2_t239_device);
+-#ifndef UAM2_RUNTIME
+ 	uam2_glsl_init(nak_nir_options(s_nak));
+-#endif
+ }
+ 
+ void uam2_exit(void)
+ {
+-#ifndef UAM2_RUNTIME
+ 	uam2_glsl_exit();
+-#endif
+ 	nak_compiler_destroy(s_nak);
+ 	s_nak = NULL;
+ 	glsl_type_singleton_decref();
+@@ -142,2 +138 @@
+-#ifndef UAM2_RUNTIME
+ bool uam2_compile_glsl(const char* source, enum uam2_stage stage, bool dump_asm, struct uam2_program* out,
+@@ -154,3 +149 @@
+-#endif
+-
+ #ifdef UAM2_RUNTIME
+diff --git a/source/meson.build b/source/meson.build
+index 7ba5acd..49d03f1 100644
+--- a/source/meson.build
++++ b/source/meson.build
+@@ -1,5 +1,5 @@
+ if runtime
+-	uam2rt_api = ['uam2rt_init', 'uam2rt_exit', 'uam2rt_compile_spirv']
++	uam2rt_api = ['uam2rt_init', 'uam2rt_exit', 'uam2rt_compile_spirv', 'uam2rt_compile_glsl']
+ 
+ 	uam2rt_link_args = ['-nostdlib', '-r', '-Wl,--force-group-allocation', '-Wl,--gc-sections']
+ 	foreach sym : uam2rt_api
+@@ -10,6 +10,7 @@ if runtime
+ 		files(
+ 			'compile.c',
+ 			'dksh_writer.cpp',
++			'glsl_frontend.cpp',
+ 			'lower_abi.c',
+ 			'horizon.c',
+ 			'log.c',
+diff --git a/source/runtime.c b/source/runtime.c
+index ded60b2..dd78a29 100644
+--- a/source/runtime.c
++++ b/source/runtime.c
+@@ -45,3 +45,27 @@ void* uam2rt_compile_spirv(const uint32_t* words, size_t num_words, Uam2rtStage
+ 		free(log.buf);
+ 	return dksh;
+ }
++
++void* uam2rt_compile_glsl(const char* source, Uam2rtStage stage,
++	size_t* out_size, char** out_log)
++{
++	struct uam2_log log = { 0 };
++	struct uam2_program prog;
++	void* dksh = NULL;
++	pthread_mutex_lock(&s_lock);
++	bool ok = uam2_compile_glsl(source, (enum uam2_stage)stage, false, &prog, &log);
++	pthread_mutex_unlock(&s_lock);
++	if (ok)
++	{
++		dksh = uam2_build_dksh(&prog, out_size);
++		if (!dksh)
++			uam2_logf(&log, "error: out of memory\n");
++		uam2_program_free(&prog);
++	}
++
++	if (out_log)
++		*out_log = log.buf;
++	else
++		free(log.buf);
++	return dksh;
++}
+diff --git a/source/horizon.c b/source/horizon.c
+--- a/source/horizon.c
++++ b/source/horizon.c
+@@ -27 +27,7 @@
+ }
++
++/* Horizon has no Unix user or group IDs. Mesa compares real and effective IDs. */
++uid_t getuid(void) { return 0; }
++uid_t geteuid(void) { return 0; }
++gid_t getgid(void) { return 0; }
++gid_t getegid(void) { return 0; }
+diff --git a/cross/rust/build-std-sysroot.sh b/cross/rust/build-std-sysroot.sh
+index 3e1099d..a562d91 100755
+--- a/cross/rust/build-std-sysroot.sh
++++ b/cross/rust/build-std-sysroot.sh
+@@ -34,8 +34,9 @@ TOML
+ rust_sysroot="$(rustc --print sysroot)"
+ rm -rf "$sysroot"
+ mkdir -p "$sysroot/lib/rustlib/$tgt/lib"
+-cp "$work/target/$tgt/release/deps/"*.rlib "$work/target/$tgt/release/deps/"*.rmeta \
+-	"$sysroot/lib/rustlib/$tgt/lib/"
++find "$work/target/$tgt/release" \( -path '*/deps/*' -o -path '*/build/*/out/*' \) \
++	\( -name '*.rlib' -o -name '*.rmeta' \) ! -name 'libuam2rt_std*' \
++	-exec cp {} "$sysroot/lib/rustlib/$tgt/lib/" +
+ for d in "$rust_sysroot/lib/rustlib/"*/; do
+ 	b="$(basename "$d")"
+ 	[ "$b" = "$tgt" ] || [ -e "$sysroot/lib/rustlib/$b" ] || ln -s "$d" "$sysroot/lib/rustlib/$b"

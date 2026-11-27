@@ -34,9 +34,13 @@ copied there too, and stays on the card (the port rewrites it every run).
 """
 
 import ftplib
+import argparse
 import os
 import io
 import re
+import shutil
+import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +56,107 @@ PROGRAM_ID = "05446530aca7e000"
 CRASH_DIRECTORY = "/atmosphere/crash_reports"
 CRASHES = LOCAL / "crash_reports"
 USAGE = "usage: switch_logs.py [N] [--keep] [--no-fetch] [--atmosphere]"
+ROOT = Path(__file__).resolve().parent.parent
+SWITCH2_LOCAL = Path("/tmp/warthog-switch2-logs")
+SWITCH2_REMOTE = "/switch/warthog/logs"
+
+
+def elf_symbols(path):
+    """Read ELF64 function symbols without a toolchain."""
+    data = path.read_bytes()
+    if data[:6] != b"\x7fELF\x02\x01":
+        raise ValueError("expected a little-endian ELF64 file")
+    section_offset = struct.unpack_from("<Q", data, 40)[0]
+    entry_size, count = struct.unpack_from("<HH", data, 58)
+    sections = [struct.unpack_from("<IIQQQQIIQQ", data, section_offset + i * entry_size)
+                for i in range(count)]
+    symbols = []
+    for section in sections:
+        if section[1] != 2:
+            continue
+        strings = sections[section[6]]
+        names = data[strings[4]:strings[4] + strings[5]]
+        for offset in range(section[4], section[4] + section[5], section[9]):
+            name, info, _, index, value, size = struct.unpack_from("<IBBHQQ", data, offset)
+            if info & 15 == 2 and index and name < len(names):
+                end = names.find(b"\0", name)
+                symbols.append((value, size, names[name:end].decode("utf-8", "replace")))
+    return symbols
+
+
+def symbolize(elf, offsets):
+    if not offsets or not elf.is_file():
+        return {}
+    executable = shutil.which("aarch64-none-elf-addr2line")
+    if executable:
+        command = [executable, "-a", "-f", "-p", "-i", "-e", str(elf)]
+    elif shutil.which("docker") and elf.resolve().is_relative_to(ROOT):
+        command = [str(ROOT / "scripts/switch2/build.sh"), "aarch64-none-elf-addr2line",
+                   "-a", "-f", "-p", "-i", "-e", str(elf.resolve().relative_to(ROOT))]
+    else:
+        command = None
+    if command:
+        result = subprocess.run(command + [hex(value) for value in offsets], capture_output=True, text=True)
+        if result.returncode == 0:
+            entries = re.split(r"(?m)^0x[0-9a-fA-F]+:\s*", result.stdout)[1:]
+            if len(entries) == len(offsets):
+                return {value: entry.strip().replace("\n", " | ")
+                        for value, entry in zip(offsets, entries)}
+    symbols = elf_symbols(elf)
+    resolved = {}
+    for address in offsets:
+        matches = [(value, name) for value, size, name in symbols
+                   if value <= address and (address < value + size if size else address == value)]
+        if matches:
+            value, name = max(matches)
+            resolved[address] = "%s+0x%x" % (name, address - value)
+    return resolved
+
+
+def switch2_main(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default=os.environ.get("WARTHOG_SWITCH2_HOST"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("WARTHOG_SWITCH2_PORT", "5000")))
+    local_elf = Path.cwd() / "build/switch2/warthog.elf"
+    parser.add_argument("--elf", type=Path,
+                        default=local_elf if local_elf.is_file() else ROOT / "build/switch2/warthog.elf")
+    parser.add_argument("--no-fetch", action="store_true")
+    args = parser.parse_args(argv)
+    if not args.no_fetch:
+        if not args.host:
+            parser.error("pass --host or set WARTHOG_SWITCH2_HOST")
+        SWITCH2_LOCAL.mkdir(parents=True, exist_ok=True)
+        try:
+            with ftplib.FTP() as ftp:
+                ftp.connect(args.host, args.port, timeout=20)
+                ftp.login()
+                names = ftp.nlst(SWITCH2_REMOTE)
+                if "warthog.log" not in (os.path.basename(name) for name in names):
+                    raise FileNotFoundError("no warthog.log on the console")
+                for name in names:
+                    name = os.path.basename(name)
+                    if name == "warthog.log" or name.endswith("_probe.log"):
+                        data = io.BytesIO()
+                        ftp.retrbinary("RETR " + SWITCH2_REMOTE + "/" + name, data.write)
+                        (SWITCH2_LOCAL / name).write_bytes(data.getvalue())
+        except (OSError, ftplib.Error) as error:
+            print("cannot reach the console's FTP server at %s:%d: %s" % (args.host, args.port, error),
+                  file=sys.stderr)
+            raise SystemExit(1)
+    text = (SWITCH2_LOCAL / "warthog.log").read_text(encoding="utf-8", errors="replace")
+    text = text.rsplit("--- launch ---", 1)[-1]
+    for line in text.splitlines():
+        lower = line.lower()
+        if any(key in lower for key in ("firmware:", "applet", "renderer:", "uam2", "build)", "module_base:")) or \
+           lower.startswith(("result:", "module:", "description:", "dkresult:", "message:", "context:")):
+            print(line)
+    faults = re.findall(r"FAULT_KIND:\s*(CPU_EXCEPTION|GPU_FAULT|DIAG_ABORT|C_ABORT)", text)
+    print("outcome:", faults[-1] if faults else
+          ("clean exit" if "startup complete; returning" in text else "incomplete"))
+    offsets = list(dict.fromkeys(int(value, 16) for value in re.findall(r"warthog\.elf\+0x([0-9a-fA-F]+)", text)))
+    resolved = symbolize(args.elf, offsets)
+    for value in offsets:
+        print("warthog.elf+0x%x: %s" % (value, resolved.get(value, "unresolved")))
 
 
 def run_number(name):
@@ -208,6 +313,14 @@ def summarise(name, crash=None):
 
 
 def main(argv):
+    if "--target" in argv:
+        index = argv.index("--target")
+        if index + 1 >= len(argv) or argv[index + 1] not in ("switch", "switch2"):
+            sys.exit("--target requires switch or switch2")
+        target = argv[index + 1]
+        argv = argv[:index] + argv[index + 2:]
+        if target == "switch2":
+            return switch2_main(argv)
     show = 0
     do_fetch = True
     clear = True

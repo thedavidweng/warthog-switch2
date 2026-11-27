@@ -15,6 +15,7 @@ end, the counts per stage and the warnings UAM printed, counted by kind.
 Any failure exits 1, so this can gate a change to the generators.
 """
 
+import argparse
 import re
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ from collections import Counter
 from pathlib import Path
 
 UAM_CANDIDATES = ("/opt/devkitpro/tools/bin/uam",)
-USAGE = "usage: dk_shader_check.py [shader folder]"
+USAGE = "usage: dk_shader_check.py [--target switch2] [shader folder]"
 
 
 def find_uam():
@@ -38,10 +39,14 @@ def find_uam():
 
 
 def main():
-    if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help")):
-        print(USAGE)
-        return 2
-    folder = Path(sys.argv[1]) if len(sys.argv) == 2 else Path("/tmp/halo-logs/halo_dk_shaders")
+    parser = argparse.ArgumentParser(usage=USAGE)
+    parser.add_argument("--target", choices=("switch", "switch2"), default="switch")
+    parser.add_argument("folder", nargs="?",
+                        default="/tmp/halo-logs/halo_dk_shaders")
+    args = parser.parse_args()
+    folder = Path(args.folder)
+    if args.target == "switch2":
+        return audit_switch2_cache(folder)
     uam = find_uam()
     if not uam:
         print("uam not found: install devkitPro's uam package (dkp-pacman -S uam)")
@@ -79,6 +84,36 @@ def main():
           (counts["vert"], counts["frag"], failures))
     for kind, count in warnings.most_common():
         print("warning x%d: %s" % (count, kind))
+    return 1 if failures else 0
+
+
+def audit_switch2_cache(folder):
+    """Validate persistent Ampere DKSH and pack records without loading them."""
+    files = sorted(folder.rglob("*.dksh")) + sorted(folder.rglob("*.pack"))
+    if not files:
+        print("no Switch 2 Ampere cache files in %s" % folder)
+        return 2
+    failures = 0
+    for path in files:
+        data = path.read_bytes()
+        if path.suffix == ".dksh":
+            valid = len(data) >= 32 and data[:4] == b"DKSH"
+            valid = valid and int.from_bytes(data[24:28], "little") == 200
+        else:
+            valid = len(data) >= 8 and data[:4] == b"DKPK"
+            offset = 8
+            while valid and offset < len(data):
+                if len(data) - offset < 24 or data[offset:offset + 4] != b"DKPR":
+                    valid = False
+                    break
+                size = int.from_bytes(data[offset + 16:offset + 20], "little")
+                valid = size > 0 and offset + 24 + size <= len(data)
+                offset += 24 + size
+        if not valid:
+            failures += 1
+            print("FAIL %s: invalid Ampere cache record" % path)
+        else:
+            print("PASS %s" % path.name)
     return 1 if failures else 0
 
 

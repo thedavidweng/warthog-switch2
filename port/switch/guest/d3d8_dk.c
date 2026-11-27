@@ -38,10 +38,15 @@ and presenting go there; a draw and a visibility test do nothing yet.
 
 void d3d8_surface_initialize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
 void d3d8_surface_resize(D3DSurface *surface, D3DFORMAT format, unsigned long width, unsigned long height);
+#ifdef HALO_64BIT
+BOOL d3d8_index_buffer_contains(const void *address, size_t size);
+#endif
 
 /* what the context supports: xbox_textures.c reads it (as d3d8_gl.c
 defines it on Android); nothing here is OpenGL, so nothing is supported */
+#ifdef HALO_GL_ES
 struct xgpu_capabilities xgpu_capabilities;
+#endif
 
 /* ---------- the screen's width
 
@@ -546,7 +551,7 @@ static float dword_to_float(DWORD value)
 Commands are written here over a frame and handed to the host half
 (port/switch/host/host_dk.c) at its end, or sooner if the stream fills. */
 
-void host_dk_submit(unsigned int commands, unsigned int size);
+void host_dk_submit(dk_addr_t commands, unsigned int size);
 /* the highest submission the GPU has finished (host_dk.c) */
 unsigned int host_dk_retired(void);
 /* the queue drained (host_dk.c) */
@@ -561,7 +566,7 @@ unsigned int host_dk_visibility(unsigned int index);
 
 #define STREAM_SIZE (1024 * 1024)
 
-static uint32_t stream[STREAM_SIZE / 4];
+static uint32_t stream[STREAM_SIZE / 4] __attribute__((aligned(sizeof(dk_addr_t))));
 static unsigned long stream_used;
 /* Each handing over of the stream is one submission, numbered from 1 as the
 host numbers them: this is the number of the one being written. */
@@ -612,7 +617,7 @@ static void stream_flush(void)
 {
 	if (!stream_used)
 		return;
-	host_dk_submit((unsigned int)(uintptr_t)stream, (unsigned int)stream_used);
+	host_dk_submit((dk_addr_t)(uintptr_t)stream, (unsigned int)stream_used);
 	stream_used = 0;
 	/* (this submission's buffers kept until the GPU has finished it) */
 	while (pending_free_count)
@@ -634,7 +639,7 @@ static void *stream_command(uint32_t type, unsigned long size)
 {
 	struct dk_command_header *header;
 
-	size = (size + 3) & ~3UL;
+	size = (size + sizeof(dk_addr_t) - 1) & ~(sizeof(dk_addr_t) - 1);
 	if (stream_used + size > STREAM_SIZE)
 		stream_flush();
 	header = (struct dk_command_header *)((unsigned char *)stream + stream_used);
@@ -1687,6 +1692,10 @@ static void parse_declaration(struct vertex_shader_object *object, const DWORD *
 	}
 }
 static void vertex_shader_note(struct vertex_shader_object *object);
+#ifdef __SWITCH2__
+static struct vertex_shader_object **vertex_shaders_by_id;
+static unsigned long vertex_shaders_by_id_count;
+#endif
 
 HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWORD *function, DWORD *handle, DWORD usage)
 {
@@ -1712,13 +1721,31 @@ HRESULT WINAPI D3DDevice_CreateVertexShader(CONST DWORD *declaration, CONST DWOR
 	parse_declaration(object, declaration);
 	vertex_shader_note(object);
 	/* odd values are FVF codes; programmable shader handles are even */
+#ifdef __SWITCH2__
+	if (object->id >= vertex_shaders_by_id_count || vertex_shaders_by_id[object->id] != object)
+	{
+		free(object->instructions);
+		free(object);
+		return E_OUTOFMEMORY;
+	}
+	*handle = (DWORD)((object->id + 1) * 2);
+#else
 	*handle = (DWORD)object;
+#endif
 	return S_OK;
 }
 
 static struct vertex_shader_object *vertex_shader_from_handle(DWORD handle)
 {
+#ifdef __SWITCH2__
+	unsigned long id = handle / 2 - 1;
+	struct vertex_shader_object *object = handle && !(handle & 1) && id < vertex_shaders_by_id_count ?
+		vertex_shaders_by_id[id] : NULL;
+	if (!object)
+		return NULL;
+#else
 	struct vertex_shader_object *object = (struct vertex_shader_object *)handle;
+#endif
 
 	if (!handle || (handle & 1) || object->signature != VERTEX_SHADER_SIGNATURE)
 		return NULL;
@@ -1833,8 +1860,10 @@ and on the console. Written once, a second into the game
 
 /* the vertex shader objects by their id (d3d8_gl.c's list, kept for its
 program records: the records name the programs by id) */
+#ifndef __SWITCH2__
 static struct vertex_shader_object **vertex_shaders_by_id;
 static unsigned long vertex_shaders_by_id_count;
+#endif
 
 static void vertex_shader_note(struct vertex_shader_object *object)
 {
@@ -2649,7 +2678,7 @@ static void pixel_key_make(struct nv2a_pixel_shader_key *key, float texture_scal
 	{
 		D3DBaseTexture *texture = device.textures[texture_clip_stage];
 		float reach = texture && texture->Data ?
-			dk_texture_reach((unsigned long)PLATFORM_PHYSICAL_TO_VIRTUAL(texture->Data)) : -1.0f;
+			dk_texture_reach((uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(texture->Data)) : -1.0f;
 
 		if (reach >= 0.0f)
 		{
@@ -2823,9 +2852,20 @@ not in the tag cache, as at first, copied the map's own each draw and slowed
 every game */
 static BOOL indices_fixed(const WORD *indices, unsigned long count)
 {
-	unsigned long start = (unsigned long)(uintptr_t)indices, end = start + count * sizeof(WORD);
+	uintptr_t start = (uintptr_t)indices, end = start + count * sizeof(WORD);
 	/* (Warthog's tag cache: platform.h, mapped at its address by xbox_memory.c) */
+#ifdef HALO_64BIT
+	uintptr_t custom = platform_ce_tag_cache_ready ? (uintptr_t)xbox_pointer(PLATFORM_CE_TAG_CACHE_BASE) : 0;
+
+	/* On LP64, D3DDevice_CreateIndexBuffer allocates in PLATFORM_CONTIGUOUS_BASE
+	   so xbox_address() fits in 32 bits. Those buffers (notably dynamic_triangles)
+	   are rewritten in place each frame without buffer renaming, so they are NOT
+	   fixed and must be copied inline into the command stream. */
+	if (d3d8_index_buffer_contains(indices, (size_t)count * sizeof(WORD)))
+		return FALSE;
+#else
 	unsigned long custom = platform_ce_tag_cache_ready ? (unsigned long)PLATFORM_CE_TAG_CACHE_BASE : 0;
+#endif
 
 	if (platform_is_contiguous(indices) && platform_is_contiguous((const char *)indices + count * sizeof(WORD) - 1))
 		return TRUE;
@@ -2837,15 +2877,16 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 {
 	struct dk_command_draw *command;
 	unsigned long stream, streams = 0, slot = 0;
-	unsigned long index_bytes = indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT && !indices_fixed(indices, count) ?
+	BOOL fixed_indices = !indices || indices_fixed(indices, count);
+	unsigned long index_bytes = indices && !fixed_indices && count * sizeof(WORD) <= INLINE_INDEX_LIMIT ?
 		(count * sizeof(WORD) + 3) & ~3UL : 0;
 
 	for (stream = 0; stream < DK_STREAM_COUNT; stream++)
 		streams += (format_told.stream_mask >> stream) & 1;
-	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(uint32_t) + index_bytes);
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + streams * 2 * sizeof(dk_addr_t) + index_bytes);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
-	command->index_address = index_bytes ? DK_INDEX_INLINE : (uint32_t)(uintptr_t)indices;
+	command->index_address = index_bytes ? DK_INDEX_INLINE : (dk_addr_t)(uintptr_t)indices;
 	if (index_bytes)
 		memcpy(&command->streams[streams], indices, count * sizeof(WORD));
 	command->vertex_offset = (int32_t)vertex_offset;
@@ -2857,7 +2898,7 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 
 		if (!((format_told.stream_mask >> stream) & 1))
 			continue;
-		command->streams[slot][0] = (uint32_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
+		command->streams[slot][0] = (dk_addr_t)(uintptr_t)PLATFORM_PHYSICAL_TO_VIRTUAL(device.streams[stream].data) +
 			(uint32_t)(first * stride);
 		command->streams[slot][1] = (uint32_t)(stride ? stride * vertex_count : STRIDELESS_STREAM_BYTES);
 		slot++;
@@ -2865,6 +2906,11 @@ static void draw_write(D3DPRIMITIVETYPE type, unsigned long count, unsigned long
 	/* (after the command: writing it may have handed the stream over, and the
 	draw is in the submission it is written to) */
 	draw_resources_used(indices != NULL, TRUE);
+	if (indices && !fixed_indices && !index_bytes)
+	{
+		stream_flush();
+		host_dk_idle();
+	}
 }
 
 void WINAPI D3DDevice_DrawVertices(D3DPRIMITIVETYPE primitive_type, UINT start_vertex, UINT vertex_count)
@@ -3022,7 +3068,7 @@ int dk_overlay_draw(const struct dk_overlay_draw *draw)
 		count -= count % 3;
 		if (!count)
 			break;
-		command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + count * draw->stride);
+		command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(dk_addr_t) + count * draw->stride);
 		command->primitive = DK_PRIMITIVE_TRIANGLES;
 		command->count = (uint32_t)count;
 		command->index_address = 0;
@@ -3126,7 +3172,7 @@ void WINAPI D3DDevice_End(void)
 	format.strides[0] = (uint32_t)stride;
 	format.stream_mask = 1;
 	draw_format_send(&format);
-	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(uint32_t) + count * stride);
+	command = stream_command(DK_COMMAND_DRAW, sizeof(*command) + 2 * sizeof(dk_addr_t) + count * stride);
 	command->primitive = primitive_of(type);
 	command->count = (uint32_t)count;
 	command->index_address = 0;
@@ -3296,7 +3342,7 @@ void halo_draw_picture(const unsigned char *rgba, long width, long height)
 	surface_describe(&device.back_buffer, FALSE, &back_buffer, scale);
 	if (back_buffer.kind != DK_SURFACE_COLOR)
 		return;
-	slot = host_dk_picture((uint32_t)(uintptr_t)rgba, (uint32_t)width, (uint32_t)height);
+	slot = host_dk_picture((dk_addr_t)(uintptr_t)rgba, (uint32_t)width, (uint32_t)height);
 	if (slot < 0)
 		return;
 	command = stream_command(DK_COMMAND_PICTURE, sizeof(*command));
@@ -3414,7 +3460,7 @@ void WINAPI D3DDevice_Present(CONST RECT *source_rectangle, CONST RECT *destinat
 			screenshot_width = command->back_buffer.pixel_width;
 			screenshot_height = command->back_buffer.pixel_height;
 			screenshot_pixels = malloc((unsigned long)screenshot_width * screenshot_height * 4);
-			command->screenshot = (uint32_t)(uintptr_t)screenshot_pixels;
+			command->screenshot = (dk_addr_t)(uintptr_t)screenshot_pixels;
 		}
 	}
 	stream_flush();

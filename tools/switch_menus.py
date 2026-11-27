@@ -69,9 +69,30 @@ SWITCH_VIDEO_ROWS = [
     ("CPU CLOCK:", "performance.cpu_clock", [("STOCK", "stock"), ("1 GHZ", "1020"), ("1.7 GHZ", "1785")],
      "1.7 GHz is the fastest Nintendo's games use.\n1 GHz and stock run cooler, and the battery lasts.", None),
 ]
+SWITCH2_VIDEO_ROWS = [
+    ("INTERNAL RESOLUTION:", "display.resolution_limit",
+     [("480P", "480"), ("720P", "720"), ("900P", "900"), ("1080P", "1080"),
+      ("1440P", "1440"), ("2160P", "2160")],
+     "The resolution the game draws at. Switch 2 handheld defaults to 1080p;\n"
+     "docked output supports 1080p, 1440p and 2160p.", None),
+    ("OUTPUT REFRESH:", "display.refresh_rate",
+     [("60 HZ", "60"), ("120 HZ", "120")],
+     "The display chooses the granted rate. 120 Hz is available up to 1440p;\n"
+     "2160p is limited to 60 Hz.", None),
+    ("FRAME RATE:", "display.max_fps",
+     [("30 (XBOX)", "30"), ("60", "60"), ("120", "120"), ("AUTO", "0"), ("NONE", "-1")],
+     "The frame rate limit. 30 is the Xbox's; Auto follows the granted\n"
+     "display refresh rate (60 or 120 FPS).", None),
+    ("V-SYNC:", "display.vsync", port_settings.ON_OFF,
+     "Sync frames to the Switch 2 display refresh.", None),
+    ("SMOOTH MOTION:", "display.interpolation", port_settings.ON_OFF,
+     "Blend frames between the authoritative 30 Hz simulation ticks.", None),
+]
 # the controller's gyro page: its rows (the reference's Gyro Aim screen)
 GYRO_SENSITIVITIES = [(f"{value:g}", f"{value:g}") for value in
                       (0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10)]
+ZOOM_SENSITIVITIES = [(f"{value:g}", f"{value:g}") for value in
+                      (0.25, 0.5, 0.6, 0.75, 0.85, 1, 1.25, 1.5, 2)]
 GYRO_ROWS = [
     ("GYRO AIM:", "input.gyro_aim", port_settings.ON_OFF + [("ONLY ON ZOOM", "zoom")],
      "Turn the view with the gyroscope,\nalways, or only while zoomed in.", None),
@@ -83,6 +104,29 @@ GYRO_ROWS = [
      "Turning it right looks left.", None),
     ("INVERT VERTICAL:", "input.gyro_invert_vertical", port_settings.YES_NO,
      "Tilting it up looks down.", None),
+]
+SWITCH2_GYRO_ROWS = GYRO_ROWS + [
+    ("ZOOM SENSITIVITY:", "input.gyro_zoom_sensitivity", ZOOM_SENSITIVITIES,
+     "Gyroscope sensitivity multiplier while zoomed in.", None),
+    ("RECENTER BUTTON:", "input.gyro_recenter", [("OFF", "false"), ("D-PAD DOWN", "true")],
+     "Tap to level the view. Hold to pause gyro\naiming while you reposition the controller.", None),
+]
+JOYCON_MOUSE_ROWS = [
+    ("JOY-CON MOUSE:", "input.joycon_mouse",
+     [("AUTO", "auto"), ("RIGHT JOY-CON", "right"), ("LEFT JOY-CON", "left"),
+      ("BOTH", "both"), ("OFF", "off")],
+     "Use Joy-Con 2 optical mouse sensors (or USB mouse) for 1:1 aiming\n"
+     "alongside controller buttons and sticks.", None),
+    ("HORIZONTAL SENSITIVITY:", "input.joycon_mouse_sensitivity", GYRO_SENSITIVITIES,
+     "How far the view turns left and right with Joy-Con 2 optical mouse aiming.", None),
+    ("VERTICAL SENSITIVITY:", "input.joycon_mouse_vertical_sensitivity", GYRO_SENSITIVITIES,
+     "How far the view turns up and down with Joy-Con 2 optical mouse aiming.", None),
+    ("ZOOM SENSITIVITY:", "input.joycon_mouse_zoom_sensitivity", ZOOM_SENSITIVITIES,
+     "Optical mouse sensitivity multiplier while zoomed in with a scope.", None),
+    ("INVERT VERTICAL:", "input.joycon_mouse_invert_y", port_settings.YES_NO,
+     "Moving the mouse forward looks down.", None),
+    ("MOUSE AIM ASSIST:", "input.joycon_mouse_aim_assist", port_settings.ON_OFF,
+     "Keep controller aim magnetism enabled while using Joy-Con 2 optical mouse.", None),
 ]
 # the Android rows the Switch has too (its game is built as Android's): the
 # rest of Android's are its own (its anti-aliasing is the OpenGL renderer's)
@@ -99,7 +143,7 @@ QUIT_HANDLERS = {'<on event="back" open="chupathingy/quit_screen"/>': '<on event
                  '<on event="b" open="chupathingy/quit_screen"/>': '<on event="b" run="NULL"/>'}
 
 
-def switch_rows(rows: list) -> list:
+def switch_rows(rows: list, target="switch") -> list:
     """the rows the Switch shows, with no platform: a row's platform names
     the platforms it is on, separated by spaces (port_settings.py). The
     Switch keeps the rows for every platform and those naming "switch";
@@ -109,6 +153,10 @@ def switch_rows(rows: list) -> list:
     for row in rows:
         label, setting, choices, help_text, platform, *named = row
         if setting in ROWS_LEFT_OUT:
+            continue
+        if target == "switch2" and setting == "performance.cpu_clock":
+            continue
+        if target == "switch2" and setting in {"display.interpolation", "display.max_fps", "display.vsync"}:
             continue
         names = platform.split() if platform else None
         if names is not None and "switch" not in names:
@@ -121,16 +169,16 @@ def switch_rows(rows: list) -> list:
     return kept
 
 
-def switch_spec(spec: dict, extra_rows: list) -> dict:
+def switch_spec(spec: dict, extra_rows: list, target="switch") -> dict:
     """a screen's spec with the Switch's rows: the others' pared down and
     its own added, with no row taking another's place, and no nested list
     left with no rows. (A shallow copy: the rows are tuples, replaced, and
     an Action, a tuple of its own kind, does not deep-copy.)"""
     spec = dict(spec)
-    spec["rows"] = switch_rows(spec["rows"]) + extra_rows
+    spec["rows"] = switch_rows(spec["rows"], target) + extra_rows
     # (rows that take the place of a desktop row, which is not here)
     spec["same_place"] = []
-    views = [(name, label, help_text, switch_rows(rows))
+    views = [(name, label, help_text, switch_rows(rows, target))
              for name, label, help_text, rows in spec.get("views", [])]
     spec["views"] = [view for view in views if view[3]]
     return spec
@@ -154,31 +202,44 @@ def main_menu_lines() -> list:
     return kept
 
 
-def controls_rows_with_gyro(original):
-    """Controls Setup's rows and widgets with the controller's GYRO page: a
-    third choice of SHOW, a mark of its own after the buttons', and the gyro
-    rows after it (their labels and helps added to the screen's strings).
-    The SHOW chooser's row, marked for the settings and buttons pages, is
-    marked for the gyro page too."""
+def controls_rows_with_gyro(original, target="switch"):
+    """Controls Setup's rows and widgets with the controller's GYRO (and on
+    Switch 2, JOY-CON MOUSE) pages: extra choices of SHOW, marks after the
+    buttons', and the setting rows after them (their labels and helps added
+    to the screen's strings)."""
     def rows_and_extra():
         base = f"{port_settings.PE}/{port_settings.CONTROLS_SCREEN}"
         rows, extra = original()
         first_label = len(port_settings.MOUSE_ROWS) + len(port_settings.GAMEPAD_ROWS)
-        rows = [(row.replace("view_gamepad_buttons", "view_gamepad_buttons_gyro"), platform, place)
+        page_mark = "view_gamepad_buttons_gyro_nm" if target == "switch2" else "view_gamepad_buttons_gyro"
+        rows = [(row.replace("view_gamepad_buttons", page_mark), platform, place)
                 for row, platform, place in rows]
-        extra = [line.replace("view_gamepad_buttons", "view_gamepad_buttons_gyro") for line in extra]
+        extra = [line.replace("view_gamepad_buttons", page_mark) for line in extra]
+        gyro_rows = SWITCH2_GYRO_ROWS if target == "switch2" else GYRO_ROWS
         rows.append((f"{base}/view_gyro", None, 0))
         added = port_settings._mark(base, "gyro")
-        for place, row in enumerate(GYRO_ROWS, 2):
+        label_idx = first_label
+        for place, row in enumerate(gyro_rows, 2):
             key = port_settings._row_key(row)
             rows.append((f"{base}/op_{key}", None, place))
-            added += port_settings._setting_row(base, row, key, first_label + place - 2)
+            added += port_settings._setting_row(base, row, key, label_idx)
+            label_idx += 1
+        all_added_rows = list(gyro_rows)
+        if target == "switch2":
+            rows.append((f"{base}/view_nm", None, 0))
+            added += port_settings._mark(base, "nm")
+            for place, row in enumerate(JOYCON_MOUSE_ROWS, 2):
+                key = port_settings._row_key(row)
+                rows.append((f"{base}/op_{key}", None, place))
+                added += port_settings._setting_row(base, row, key, label_idx)
+                label_idx += 1
+            all_added_rows.extend(JOYCON_MOUSE_ROWS)
         # (the strings close the widgets: the rows go before them, the
         # labels and helps into them)
         labels_at = next(index for index, line in enumerate(extra) if line == f'\t<strings name="{base}/labels">')
         extra = extra[:labels_at] + added + extra[labels_at:]
-        for name, texts in (("labels", [label for label, *_ in GYRO_ROWS]),
-                            ("help_strings", [row[3].replace("\n", "\\n") for row in GYRO_ROWS])):
+        for name, texts in (("labels", [label for label, *_ in all_added_rows]),
+                            ("help_strings", [row[3].replace("\n", "\\n") for row in all_added_rows])):
             start = extra.index(f'\t<strings name="{base}/{name}">')
             end = extra.index("\t</strings>", start)
             extra[end:end] = [f"\t\t<string{port_settings.attributes([('text', text)])}/>" for text in texts]
@@ -186,27 +247,39 @@ def controls_rows_with_gyro(original):
     return rows_and_extra
 
 
-def files() -> dict:
+def files(target="switch") -> dict:
     """the files, by their paths below the menus folder"""
-    port_settings.CONTROLLER_PAGES = [*port_settings.CONTROLLER_PAGES, "GYRO"]
-    port_settings._controls_rows = controls_rows_with_gyro(port_settings._controls_rows)
-    for folder, spec in port_settings.SCREENS.items():
-        port_settings.SCREENS[folder] = switch_spec(spec, SWITCH_VIDEO_ROWS if folder == "video_settings" else [])
-    return {
-        SETTINGS_PAGES: port_settings.chupathingy_settings_pages(),
-        MAIN_MENU: main_menu_lines(),
-        VIDEO: port_settings.settings_files()[VIDEO_NAME],
-        CONTROLS: port_settings.settings_files()[CONTROLS_NAME],
-    }
+    orig_pages = list(port_settings.CONTROLLER_PAGES)
+    orig_controls_rows = port_settings._controls_rows
+    orig_screens = dict(port_settings.SCREENS)
+    try:
+        extra_pages = ["GYRO", "JOY-CON MOUSE"] if target == "switch2" else ["GYRO"]
+        port_settings.CONTROLLER_PAGES = [*orig_pages, *extra_pages]
+        port_settings._controls_rows = controls_rows_with_gyro(orig_controls_rows, target=target)
+        for folder, spec in orig_screens.items():
+            rows = SWITCH2_VIDEO_ROWS if target == "switch2" else SWITCH_VIDEO_ROWS
+            port_settings.SCREENS[folder] = switch_spec(spec, rows if folder == "video_settings" else [], target)
+        return {
+            SETTINGS_PAGES: port_settings.chupathingy_settings_pages(),
+            MAIN_MENU: main_menu_lines(),
+            VIDEO: port_settings.settings_files()[VIDEO_NAME],
+            CONTROLS: port_settings.settings_files()[CONTROLS_NAME],
+        }
+    finally:
+        port_settings.CONTROLLER_PAGES = orig_pages
+        port_settings._controls_rows = orig_controls_rows
+        port_settings.SCREENS.clear()
+        port_settings.SCREENS.update(orig_screens)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=ROOT / "build" / "switch" / "menus",
                         help="the menus folder to write (default: build/switch/menus)")
+    parser.add_argument("--target", choices=("switch", "switch2"), default="switch")
     parser.add_argument("--stamp", type=Path, help="a file touched when done (the build's)")
     args = parser.parse_args()
-    written = files()
+    written = files(args.target)
     for name, lines in written.items():
         if not (MENUS / name).is_file():
             print(f"{name}: not a file the game embeds, so it would replace nothing", file=sys.stderr)

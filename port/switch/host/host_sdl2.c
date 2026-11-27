@@ -32,9 +32,19 @@ Android, each request goes to a thread that has one.
 #include "host_switch.h"
 #include "host_ui.h"
 
+#ifdef __SWITCH2__
+#include "../../switch2/host/switch2_gameshare.h"
+#include "../../switch2/host/switch2_input.h"
+#include "../../switch2/host/switch2_text_nmouse.h"
+static void rumble_stop_pad(int pad);
+#endif
+
 #include <SDL2/SDL.h>
 #include "tomlc17.h"
 #include <switch.h>
+#ifdef __SWITCH2__
+#include "../../switch2/host/nx2_platform.h"
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +53,17 @@ Android, each request goes to a thread that has one.
 #include <time.h>
 #include <sys/stat.h>
 
+#define RUMBLE_PADS 8
+
 #define HANDLE_COUNT 256
+
+#ifdef __SWITCH2__
+typedef uintptr_t sdl_guest_address;
+#include "../../switch2/host/switch2_perf.h"
+static struct switch2_perf_stats switch2_stats;
+#else
+typedef uint32_t sdl_guest_address;
+#endif
 
 enum handle_type
 {
@@ -169,10 +189,17 @@ static char standin_window, standin_context;
 /* the console's screen, which under deko3d stands for the window's size */
 static void standin_window_size(int *width, int *height)
 {
+#ifdef __SWITCH2__
+	u32 w, h;
+	nx2DisplaySize(&w, &h);
+	*width = (int)w;
+	*height = (int)h;
+#else
 	int docked = appletGetOperationMode() == AppletOperationMode_Console;
 
 	*width = docked ? 1920 : 1280;
 	*height = docked ? 1080 : 720;
+#endif
 }
 
 uint32_t host_sdl_create_window(const char *title, int width, int height, int64_t flags)
@@ -292,6 +319,9 @@ int host_sdl_gl_set_swap_interval(int interval)
 	if (setting && *setting)
 		interval = atoi(setting);
 	swap_interval = interval;
+#ifdef __SWITCH2__
+	nx2DisplayApply(interval);
+#endif
 	if (host_renderer_deko3d)
 		return 1;
 	return SDL_GL_SetSwapInterval(interval) == 0;
@@ -472,7 +502,9 @@ static void frame_statistics(void)
 		const char *setting = getenv("HALO_FPS_LOG");
 
 		interval = setting && *setting ? atof(setting) : 5.0;
+#ifndef __SWITCH2__
 		log_clocks();
+#endif
 	}
 	if (interval <= 0.0)
 		return;
@@ -498,6 +530,16 @@ static void frame_statistics(void)
 		double milliseconds = (double)(now - previous) * 1000.0 / (double)SDL_GetPerformanceFrequency();
 
 		host_dk_frame_report(&report);
+#if defined(__SWITCH2__) && WARTHOG_DEV_PROFILING
+		static unsigned switch2_frames;
+		switch2_perf_record_frame(&switch2_stats, milliseconds, report.gpu_last_us / 1000.0,
+			report.submit_wait_us, report.acquire_max_us, report.fence_max_us);
+		if (++switch2_frames == 300) {
+			switch2_perf_flush(&switch2_stats, getenv("WARTHOG_SWITCH2_SCENE") ?: "main_menu",
+				"Normal", 0.0);
+			switch2_frames = 0;
+		}
+#endif
 		host_debug_profile_spike((uint64_t)(milliseconds * 1000000.0));
 		if (milliseconds > 20.0)
 		{
@@ -584,10 +626,15 @@ int host_sdl_gl_swap_window(uint32_t window)
 	if ((void *)object == (void *)&standin_window)
 	{
 		/* until deko3d presents (and its swapchain waits for the display),
-		frames are held to the display's 60 Hz here, as the swap's vsync
+		frames are held to the display's granted rate here, as the swap's vsync
 		holds them over Mesa */
 		static uint64_t next;
+#ifdef __SWITCH2__
+		int hz = nx2DisplayRefreshRate();
+		uint64_t now = armTicksToNs(armGetSystemTick()), interval = 1000000000ull / (uint64_t)(hz > 0 ? hz : 60);
+#else
 		uint64_t now = armTicksToNs(armGetSystemTick()), interval = 1000000000ull / 60;
+#endif
 
 		if (swap_interval > 0 && !host_dk_presenting && next > now)
 		{
@@ -763,9 +810,15 @@ uint32_t host_sdl_gamepad_from_id(uint32_t id)
 void host_sdl_close_gamepad(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
+	SDL_JoystickID pad;
 
 	if (!object)
 		return;
+	pad = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(object));
+#ifdef __SWITCH2__
+	if (pad >= 0 && pad < RUMBLE_PADS)
+		rumble_stop_pad((int)pad);
+#endif
 	pthread_mutex_lock(&handle_lock);
 	handles[gamepad].type = _handle_free;
 	handles[gamepad].object = NULL;
@@ -784,6 +837,10 @@ int host_sdl_gamepad_button(uint32_t gamepad, int button)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (switch2_nmouse_suppresses_gamepad_button(0, button))
+		return 0;
+#endif
 	return object ? SDL_GameControllerGetButton(object, (SDL_GameControllerButton)button) : 0;
 }
 
@@ -803,6 +860,10 @@ uint32_t host_sdl_gamepad_vendor(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (object && SDL_GameControllerGetVendor(object) == 0)
+		return 0x057e;
+#endif
 	return object ? SDL_GameControllerGetVendor(object) : 0;
 }
 
@@ -810,8 +871,21 @@ uint32_t host_sdl_gamepad_product(uint32_t gamepad)
 {
 	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
 
+#ifdef __SWITCH2__
+	if (object && SDL_GameControllerGetProduct(object) == 0)
+		return 0x2009;
+#endif
 	return object ? SDL_GameControllerGetProduct(object) : 0;
 }
+
+#ifdef __SWITCH2__
+const char *host_sdl_gamepad_name(uint32_t gamepad)
+{
+	SDL_GameController *object = handle_get(gamepad, _handle_gamepad);
+	return object && SDL_GameControllerName(object) ?
+		SDL_GameControllerName(object) : "Nintendo Switch Pro Controller";
+}
+#endif
 
 int host_sdl_gamepad_type(uint32_t gamepad)
 {
@@ -820,14 +894,32 @@ int host_sdl_gamepad_type(uint32_t gamepad)
 
 	if (!object)
 		return 0; /* SDL_GAMEPAD_TYPE_UNKNOWN */
+#ifdef __SWITCH2__
+	if (SDL_GameControllerGetType(object) == SDL_CONTROLLER_TYPE_UNKNOWN &&
+		host_sdl_gamepad_vendor(gamepad) == 0x057e)
+		return host_sdl3_gamepad_type(_host_gamepad_switch_pro);
+#endif
 	switch (SDL_GameControllerGetType(object))
 	{
 	case SDL_CONTROLLER_TYPE_XBOXONE: kind = _host_gamepad_xboxone; break;
 	case SDL_CONTROLLER_TYPE_PS3: kind = _host_gamepad_ps3; break;
 	case SDL_CONTROLLER_TYPE_PS4: kind = _host_gamepad_ps4; break;
 	case SDL_CONTROLLER_TYPE_PS5: kind = _host_gamepad_ps5; break;
-	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO: kind = _host_gamepad_switch_pro; break;
-	default: kind = _host_gamepad_xbox360; break;
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+#ifdef SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+	case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+#endif
+		kind = _host_gamepad_switch_pro;
+		break;
+	default:
+#ifdef __SWITCH2__
+		kind = _host_gamepad_switch_pro;
+#else
+		kind = _host_gamepad_xbox360;
+#endif
+		break;
 	}
 	return host_sdl3_gamepad_type(kind);
 }
@@ -851,14 +943,42 @@ The game sends them holding its input lock, which its game thread waits
 for, so the request only notes the motors wanted, and a thread of its own
 makes the calls to HID (one that is slow is logged). */
 
-#define RUMBLE_PADS 8
 #define RUMBLE_LOW_HZ 160.0f
 #define RUMBLE_HIGH_HZ 320.0f
 
 /* SDL pad i is npad No1+i. Pad 0 also reads the handheld, which is how the
 console's own Joy-Cons are seen when they are attached. 1 if it has a style. */
+#ifdef __SWITCH2__
+static struct switch2_controller_slots controller_slots;
+static int controller_slots_ready;
+
+static void controller_slots_refresh(void)
+{
+	int wireless[SWITCH2_NPAD_COUNT];
+	unsigned index;
+
+	for (index = 0; index < SWITCH2_NPAD_COUNT; index++)
+		wireless[index] = hidGetNpadStyleSet(
+			(HidNpadIdType)(HidNpadIdType_No1 + index)) != 0;
+	if (!controller_slots_ready) {
+		switch2_slots_init(&controller_slots);
+		controller_slots_ready = 1;
+	}
+	switch2_slots_update(&controller_slots,
+		hidGetNpadStyleSet(HidNpadIdType_Handheld) != 0, wireless);
+}
+#endif
+
 static int pad_npad(int pad, HidNpadIdType *id, u32 *style)
 {
+#ifdef __SWITCH2__
+	controller_slots_refresh();
+	if (pad == 0) {
+		*id = (HidNpadIdType)switch2_slot_npad(&controller_slots, 0);
+		*style = *id == SWITCH2_NPAD_INVALID ? 0 : hidGetNpadStyleSet(*id);
+		return *style != 0;
+	}
+#endif
 	*id = (HidNpadIdType)(HidNpadIdType_No1 + pad);
 	*style = hidGetNpadStyleSet(*id);
 	if (pad == 0 && !*style && hidGetNpadStyleSet(HidNpadIdType_Handheld))
@@ -884,6 +1004,10 @@ static struct
 static pthread_mutex_t rumble_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rumble_condition = PTHREAD_COND_INITIALIZER;
 static int rumble_thread_started;
+#ifdef __SWITCH2__
+static int rumble_stop;
+static pthread_t rumble_thread_id;
+#endif
 
 /* the pad's devices for the style its controller has now (count 0: none) */
 static void rumble_ready(int pad)
@@ -973,6 +1097,17 @@ static void *rumble_thread(void *unused)
 	{
 		int pad, any = 0;
 
+#ifdef __SWITCH2__
+		if (rumble_stop) {
+			for (pad = 0; pad < RUMBLE_PADS; pad++)
+				if (rumble_pads[pad].count) {
+					pthread_mutex_unlock(&rumble_lock);
+					rumble_send(pad, 0, 0);
+					pthread_mutex_lock(&rumble_lock);
+				}
+			break;
+		}
+#endif
 		for (pad = 0; pad < RUMBLE_PADS; pad++)
 		{
 			uint32_t low, high;
@@ -990,8 +1125,26 @@ static void *rumble_thread(void *unused)
 		if (!any)
 			pthread_cond_wait(&rumble_condition, &rumble_lock);
 	}
+#ifdef __SWITCH2__
+	pthread_mutex_unlock(&rumble_lock);
+#endif
 	return NULL;
 }
+
+#ifdef __SWITCH2__
+static void rumble_stop_pad(int pad)
+{
+	if (!rumble_thread_started)
+		return;
+	pthread_mutex_lock(&rumble_lock);
+	rumble_pads[pad].wanted_low = 0;
+	rumble_pads[pad].wanted_high = 0;
+	rumble_pads[pad].wanted = 1;
+	rumble_pads[pad].requested = 1;
+	pthread_cond_signal(&rumble_condition);
+	pthread_mutex_unlock(&rumble_lock);
+}
+#endif
 
 int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint32_t milliseconds)
 {
@@ -1007,6 +1160,13 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 	pthread_mutex_lock(&rumble_lock);
 	if (!rumble_thread_started)
 	{
+#ifdef __SWITCH2__
+		rumble_stop = 0;
+		if (pthread_create(&rumble_thread_id, NULL, rumble_thread, NULL) == 0)
+			rumble_thread_started = 1;
+		else
+			host_logf(HOST_LOG_ERROR, "rumble: its thread could not be made");
+#else
 		pthread_t thread;
 
 		rumble_thread_started = 1;
@@ -1014,11 +1174,17 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 			pthread_detach(thread);
 		else
 			host_logf(HOST_LOG_ERROR, "rumble: its thread could not be made");
+#endif
 	}
 	/* (every request the first time, and after that each change; the
 	thread also readies a pad whose controller changed as it sends) */
-	low &= 0xffff;
-	high &= 0xffff;
+#ifdef __SWITCH2__
+	low = switch2_rumble_level(low);
+	high = switch2_rumble_level(high);
+#else
+	low &= UINT16_MAX;
+	high &= UINT16_MAX;
+#endif
 	if (!rumble_pads[pad].requested || rumble_pads[pad].wanted_low != low || rumble_pads[pad].wanted_high != high)
 	{
 		rumble_pads[pad].requested = 1;
@@ -1085,9 +1251,20 @@ static HidNpadStyleTag gyro_style_tag(u32 style, int *sensors)
 }
 
 /* adds this sample's turn. Positive yaw is to the player's right, positive
-pitch looks up. */
+pitch looks up in the original Switch conversion below. */
 static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float *yaw, float *pitch)
 {
+#ifdef __SWITCH2__
+	int sensors;
+	HidNpadStyleTag tag = gyro_style_tag(style, &sensors);
+	enum switch2_gyro_orientation orientation = tag == HidNpadStyleTag_NpadJoyRight ? SWITCH2_GYRO_RIGHT :
+		tag == HidNpadStyleTag_NpadJoyLeft ? SWITCH2_GYRO_LEFT : SWITCH2_GYRO_NORMAL;
+	const float rate[] = { state->angular_velocity.x, state->angular_velocity.y, state->angular_velocity.z };
+	const float gravity[] = { state->acceleration.x, state->acceleration.y, state->acceleration.z };
+
+	switch2_gyro_add(orientation, !!(state->attributes & HidSixAxisSensorAttribute_IsConnected),
+		rate, gravity, state->delta_time, yaw, pitch);
+#else
 	float x = state->angular_velocity.x;
 	float y = state->angular_velocity.y;
 	float seconds;
@@ -1121,6 +1298,7 @@ static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float
 		*yaw += -y * seconds;
 		*pitch += -x * seconds;
 	}
+#endif
 }
 
 static void gyro_ready(int pad)
@@ -1132,16 +1310,43 @@ static void gyro_ready(int pad)
 	Result result;
 
 	pad_npad(pad, &id, &style);
-	if (gyro_pads[pad].id == id && gyro_pads[pad].style == style && (gyro_pads[pad].started || !style))
+	tag = gyro_style_tag(style, &sensors);
+	/* A pair normally uses the right sensor. Each Joy-Con can enter Nmouse
+	   independently, so only select a sensor that is free for gyro aiming. */
+	sensor = tag ? (sensors == 2 ? 1 : 0) : -1;
+#ifdef __SWITCH2__
+	if (tag == HidNpadStyleTag_NpadJoyDual)
+	{
+		HidNpadJoyDualState state;
+		unsigned connected = 0;
+
+		if (hidGetNpadStatesJoyDual(id, &state, 1))
+		{
+			if (state.attributes & HidNpadAttribute_IsLeftConnected)
+				connected |= SWITCH2_JOYCON_LEFT;
+			if (state.attributes & HidNpadAttribute_IsRightConnected)
+				connected |= SWITCH2_JOYCON_RIGHT;
+		}
+		sensor = switch2_gyro_pair_sensor(connected, switch2_nmouse_tracking_joycons(id));
+	}
+	else if (tag == HidNpadStyleTag_NpadJoyLeft || tag == HidNpadStyleTag_NpadJoyRight)
+	{
+		unsigned side = tag == HidNpadStyleTag_NpadJoyLeft ? SWITCH2_JOYCON_LEFT : SWITCH2_JOYCON_RIGHT;
+		if (switch2_nmouse_tracking_joycons(id) & side)
+			sensor = -1;
+	}
+#endif
+	if (gyro_pads[pad].id == id && gyro_pads[pad].style == style && gyro_pads[pad].sensor == sensor &&
+		(gyro_pads[pad].started || sensor < 0))
 		return;
 	if (gyro_pads[pad].started)
 		hidStopSixAxisSensor(gyro_pads[pad].handles[gyro_pads[pad].sensor]);
 	gyro_pads[pad].id = id;
 	gyro_pads[pad].style = style;
+	gyro_pads[pad].sensor = sensor;
 	gyro_pads[pad].started = 0;
 	gyro_pads[pad].had_sample = 0;
-	tag = gyro_style_tag(style, &sensors);
-	if (!tag)
+	if (sensor < 0)
 		return;
 	result = hidGetSixAxisSensorHandles(gyro_pads[pad].handles, sensors, id, tag);
 	if (R_FAILED(result))
@@ -1150,15 +1355,12 @@ static void gyro_ready(int pad)
 			(unsigned)result);
 		return;
 	}
-	/* a pair's right Joy-Con; the only sensor otherwise */
-	sensor = sensors == 2 ? 1 : 0;
 	result = hidStartSixAxisSensor(gyro_pads[pad].handles[sensor]);
 	if (R_FAILED(result))
 	{
 		host_logf(HOST_LOG_WARN, "gyro: pad %d's sensor did not start: 0x%x", pad, (unsigned)result);
 		return;
 	}
-	gyro_pads[pad].sensor = sensor;
 	gyro_pads[pad].started = 1;
 	host_logf(HOST_LOG_INFO, "gyro: pad %d is npad %d, style %#x, sensor %d", pad, (int)id, (unsigned)style, sensor);
 }
@@ -1215,8 +1417,10 @@ void host_sdl_gamepad_gyro(uint32_t gamepad, float *yaw, float *pitch)
 	if (pad < 0 || pad >= RUMBLE_PADS)
 		return;
 	gyro_read((int)pad, yaw, pitch);
+#ifndef __SWITCH2__
 	*yaw *= GYRO_SCALE;
 	*pitch *= GYRO_SCALE;
+#endif
 }
 
 /* ---------- audio
@@ -1229,8 +1433,8 @@ SDL2 callback copies it out. */
 struct audio_binding
 {
 	uint32_t handle;
-	uint32_t callback;
-	uint32_t userdata;
+	sdl_guest_address callback;
+	sdl_guest_address userdata;
 	SDL_AudioDeviceID device;
 	pthread_mutex_t lock;
 	pthread_cond_t requested;
@@ -1240,8 +1444,53 @@ struct audio_binding
 	unsigned char *buffer;
 	int buffer_length;
 	int buffer_size;
+	int sample_rate;
+	int channels;
+	SDL_AudioFormat format;
 };
 
+#ifdef __SWITCH2__
+void host_sdl_quit(void)
+{
+	unsigned int index;
+	pthread_mutex_lock(&rumble_lock);
+	rumble_stop = 1;
+	pthread_cond_signal(&rumble_condition);
+	pthread_mutex_unlock(&rumble_lock);
+	if (rumble_thread_started)
+		pthread_join(rumble_thread_id, NULL);
+	rumble_thread_started = 0;
+	for (index = 1; index < HANDLE_COUNT; index++)
+	{
+		if (handles[index].type == _handle_audio)
+		{
+			struct audio_binding *binding = handles[index].object;
+			SDL_CloseAudioDevice(binding->device);
+			SDL_free(binding->buffer);
+			pthread_mutex_destroy(&binding->lock);
+			pthread_cond_destroy(&binding->requested);
+			pthread_cond_destroy(&binding->done);
+			SDL_free(binding);
+		}
+		else if (handles[index].type == _handle_gamepad)
+			SDL_GameControllerClose(handles[index].object);
+		handles[index].type = _handle_free;
+		handles[index].object = NULL;
+	}
+	for (index = 0; index < RUMBLE_PADS; index++)
+		if (gyro_pads[index].started)
+			hidStopSixAxisSensor(gyro_pads[index].handles[gyro_pads[index].sensor]);
+#if WARTHOG_DEV_PROFILING
+	if (switch2_stats.frame_count > 0)
+		switch2_perf_flush(&switch2_stats, getenv("WARTHOG_SWITCH2_SCENE") ?: "main_menu",
+			"Normal", 0.0);
+#endif
+	switch2_text_nmouse_stop();
+	SDL_Quit();
+}
+#endif
+
+#ifndef __SWITCH2__
 static void *audio_thread(void *context)
 {
 	struct audio_binding *binding = context;
@@ -1263,6 +1512,7 @@ static void *audio_thread(void *context)
 	}
 	return NULL;
 }
+#endif
 
 /* appends to the binding's buffer; the caller holds its lock */
 static int audio_keep(struct audio_binding *binding, const void *data, int length)
@@ -1281,6 +1531,11 @@ static int audio_keep(struct audio_binding *binding, const void *data, int lengt
 	}
 	memcpy(binding->buffer + binding->buffer_length, data, (size_t)length);
 	binding->buffer_length += length;
+#ifdef __SWITCH2__
+	if (binding->format == AUDIO_S16SYS && binding->channels == 2)
+		switch2_gameshare_guest_audio(data, (uint32_t)length / 4,
+			(uint32_t)binding->sample_rate);
+#endif
 	return 1;
 }
 
@@ -1293,10 +1548,18 @@ static void SDLCALL audio_callback(void *userdata, Uint8 *stream, int length)
 	if (binding->callback && binding->buffer_length < length)
 	{
 		binding->additional = length - binding->buffer_length;
+#ifdef __SWITCH2__
+		int additional = binding->additional;
+		pthread_mutex_unlock(&binding->lock);
+		((void (*)(void *, void *, int, int))(uintptr_t)binding->callback)(
+			(void *)(uintptr_t)binding->userdata, (void *)(uintptr_t)binding->handle, additional, additional);
+		pthread_mutex_lock(&binding->lock);
+#else
 		binding->pending = 1;
 		pthread_cond_signal(&binding->requested);
 		while (binding->pending)
 			pthread_cond_wait(&binding->done, &binding->lock);
+#endif
 	}
 	copied = binding->buffer_length < length ? binding->buffer_length : length;
 	memcpy(stream, binding->buffer, (size_t)copied);
@@ -1316,7 +1579,7 @@ struct sdl3_audio_spec
 	int32_t freq;
 };
 
-uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, uint32_t callback, uint32_t userdata)
+uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, sdl_guest_address callback, sdl_guest_address userdata)
 {
 	const struct sdl3_audio_spec *guest_spec = spec;
 	struct audio_binding *binding = SDL_calloc(1, sizeof(*binding));
@@ -1367,6 +1630,9 @@ uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, uint32_t 
 		SDL_free(binding);
 		return 0;
 	}
+	binding->sample_rate = obtained.freq;
+	binding->channels = obtained.channels;
+	binding->format = obtained.format;
 	host_logf(HOST_LOG_INFO, "audio %d Hz, %d channels, %d frames a callback", obtained.freq, obtained.channels,
 		obtained.samples);
 	/* the device starts paused, so no callback can run before this */
@@ -1377,8 +1643,10 @@ uint32_t host_sdl_open_audio_stream(uint32_t device, const void *spec, uint32_t 
 		SDL_free(binding);
 		return 0;
 	}
+#ifndef __SWITCH2__
 	if (callback && host_native_thread_create(audio_thread, binding, 256 * 1024) != 0)
 		host_fatal("cannot start the audio thread");
+#endif
 	return binding->handle;
 }
 
@@ -1555,7 +1823,7 @@ int host_sdl_show_simple_message_box(uint32_t flags, const char *title, const ch
 
 /* the texts are guest addresses, as the Android host takes them */
 int host_sdl_show_message_box(uint32_t flags, const char *title, const char *message, int count,
-	const uint32_t *button_flags, const int32_t *button_ids, const uint32_t *button_texts)
+	const uint32_t *button_flags, const int32_t *button_ids, const sdl_guest_address *button_texts)
 {
 	const char *labels[4];
 	char choices[256];

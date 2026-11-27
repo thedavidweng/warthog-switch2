@@ -44,6 +44,7 @@ what tests the writer in this phase.
 
 #include "xgpu.h"
 #include "dk_shaders.h"
+#include "dk_commands.h"
 
 #include "platform.h"
 #include "posix.h"
@@ -60,8 +61,8 @@ what tests the writer in this phase.
 /* the host's half of the cache, through the import stubs (a 64-bit hash
 goes in one X register on both sides; the pointers are guest addresses,
 zero-extended by the stubs) */
-uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, uint32_t state_out);
-void host_dk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl, uint32_t glsl_size, uint32_t priority);
+uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, dk_addr_t state_out);
+void host_dk_shader_compile(uint32_t stage, uint64_t hash, dk_addr_t glsl, uint32_t glsl_size, uint32_t priority);
 uint32_t host_dk_shader_known(uint32_t stage, uint64_t hash);
 uint32_t host_dk_shader_pending(void);
 uint32_t host_dk_shader_pending_urgent(uint32_t priority);
@@ -762,7 +763,7 @@ static uint32_t key_ask(struct dk_key *key, uint32_t priority)
 	uint32_t handle;
 
 	hash_log_once(key->hash);
-	handle = host_dk_shader_find(key->stage, key->hash, (uint32_t)(uintptr_t)&state);
+	handle = host_dk_shader_find(key->stage, key->hash, (dk_addr_t)(uintptr_t)&state);
 	if (handle)
 		return handle;
 	if (state == 1)
@@ -777,7 +778,7 @@ static uint32_t key_ask(struct dk_key *key, uint32_t priority)
 
 		if (!glsl)
 			return 0;
-		host_dk_shader_compile(key->stage, key->hash, (uint32_t)(uintptr_t)glsl, (uint32_t)strlen(glsl), priority);
+		host_dk_shader_compile(key->stage, key->hash, (dk_addr_t)(uintptr_t)glsl, (uint32_t)strlen(glsl), priority);
 		free(glsl);
 	}
 	return 0;
@@ -808,7 +809,7 @@ static BOOL pass_ask(struct dk_key *key, uint32_t priority, int *generated)
 		*generated = 1;
 		if (glsl)
 		{
-			host_dk_shader_compile(key->stage, key->hash, (uint32_t)(uintptr_t)glsl, (uint32_t)strlen(glsl),
+			host_dk_shader_compile(key->stage, key->hash, (dk_addr_t)(uintptr_t)glsl, (uint32_t)strlen(glsl),
 				priority);
 			free(glsl);
 		}
@@ -985,7 +986,7 @@ static void preload_frame(void)
 		if (!key->ready || key->handle || key->shared)
 			continue;
 		/* (loaded: its handle; on the card: queued for the loader) */
-		key->handle = host_dk_shader_find(key->stage, key->hash, (uint32_t)(uintptr_t)&state);
+		key->handle = host_dk_shader_find(key->stage, key->hash, (dk_addr_t)(uintptr_t)&state);
 		taken++;
 		preload_asked++;
 	}
@@ -1006,18 +1007,21 @@ static void status_frame(void)
 {
 	static unsigned long frames;
 	static BOOL shown;
+	static uint32_t total;
 	uint32_t pending;
 
 	if (++frames < DK_STATUS_EVERY_FRAMES)
 		return;
 	frames = 0;
 	pending = host_dk_shader_pending();
+	if (pending > total)
+		total = pending;
 	if (pending >= DK_STATUS_MINIMUM || (shown && pending))
 	{
 		shown = TRUE;
 		terminal_status_printf(global_real_argb_yellow,
-			"Compiling shaders after an update: %u left. The game may be slow to respond until it is done.",
-			(unsigned)pending);
+			"Compiling shaders: %u / %u. The game may be slow to respond until it is done.",
+			(unsigned)(total > pending ? total - pending : 0), (unsigned)total);
 		return;
 	}
 	if (shown)
@@ -1339,7 +1343,8 @@ int dk_shader_map_waiting(void)
 	if (now_ms() - said >= 1000)
 	{
 		said = now_ms();
-		terminal_status_printf(global_real_argb_yellow, "Compiling this map's shaders: %u left.", (unsigned)pending);
+		terminal_status_printf(global_real_argb_yellow, "Compiling shaders: %u / %u",
+			(unsigned)(wait_most > pending ? wait_most - pending : 0), (unsigned)wait_most);
 	}
 	return 1;
 }
@@ -1528,7 +1533,7 @@ static uint32_t stall_wait(uint32_t stage, uint64_t hash)
 		host_dk_shader_load_first(stage, hash);
 		usleep(1000);
 		state = 0;
-		handle = host_dk_shader_find(stage, hash, (uint32_t)(uintptr_t)&state);
+		handle = host_dk_shader_find(stage, hash, (dk_addr_t)(uintptr_t)&state);
 		waited = now_us() - started;
 		if (handle || !state)
 			break;
@@ -1607,7 +1612,7 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 		last_handle[which] = entry->handle;
 		return entry->handle;
 	}
-	handle = host_dk_shader_find(stage, hash, (uint32_t)(uintptr_t)&state);
+	handle = host_dk_shader_find(stage, hash, (dk_addr_t)(uintptr_t)&state);
 	if (handle)
 	{
 		if (handle_count < HANDLE_SLOTS / 8 * 7)
@@ -1641,7 +1646,7 @@ uint32_t dk_shader_for_draw(uint32_t stage, const void *key_data)
 			glsl = nv2a_dk_pixel_shader_to_glsl(&data.pixel);
 		if (glsl)
 		{
-			host_dk_shader_compile(stage, hash, (uint32_t)(uintptr_t)glsl, (uint32_t)strlen(glsl),
+			host_dk_shader_compile(stage, hash, (dk_addr_t)(uintptr_t)glsl, (uint32_t)strlen(glsl),
 				DK_SHADER_PRIORITY_DRAW);
 			free(glsl);
 			if (stall_allowed())

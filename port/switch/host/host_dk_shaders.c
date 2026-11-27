@@ -54,12 +54,19 @@ command stream) is an index into the table of loaded shaders, plus one.
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __SWITCH2__
+#include "../../../port/switch2/host/switch2_shader_cache.h"
+#include "../../../port/switch2/host/switch2_perf.h"
+#endif
 
 /* the compiler whose DKSH files these are: the folder name, so a new UAM
    does not read an old compiler's files (port/switch/build.py defines it;
    a hand build says "unknown" and shares whatever folder that makes) */
 #ifndef HOST_DK_UAM_COMMIT
 #define HOST_DK_UAM_COMMIT "unknown"
+#endif
+#ifndef HOST_DK_SHADER_COMPILE_FLAGS
+#define HOST_DK_SHADER_COMPILE_FLAGS 0u
 #endif
 
 /* (32768 shaders of the 0.85 KB they average, with room: a card that has met many maps had more than the 4096 the
@@ -90,7 +97,12 @@ the probe's workers ran with (phase 5, step 1) */
 #define DKSH_THREAD_STACK (2 * 1024 * 1024)
 /* the compile threads: one for each helper core (the console gives a title
 three, and the game thread keeps one to itself) */
+#ifdef __SWITCH2__
+/* UAM2 serializes compilation; Switch 1's worker measurements do not apply. */
+#define DKSH_COMPILE_THREADS 1
+#else
 #define DKSH_COMPILE_THREADS 2
+#endif
 
 /* the DKSH file's header, as the probe's shader_load reads it */
 struct dksh_header
@@ -195,6 +207,11 @@ static struct
 	pthread_cond_t queue_condition;
 
 	int started;
+#ifdef __SWITCH2__
+	int stopping;
+	pthread_t workers[DKSH_COMPILE_THREADS], writer, loader;
+	int writer_started;
+#endif
 	/* the set of shaders known: on the card or loaded. Linear probing;
 	0 marks an empty slot, and no hash is 0 (FNV-1a never returns it) */
 	struct dksh_slot set[DKSH_SET_SLOTS];
@@ -266,6 +283,13 @@ static struct
 	guest's "moving" message) */
 	uint32_t loose_loads;
 } dksh;
+
+#ifdef __SWITCH2__
+/* The existing queue and pack remain authoritative. This identity is logged
+   and used by the Switch 2 cache writer so a generator or ABI change cannot
+   reuse an Ampere entry made by another build. */
+static struct switch2_shader_cache_key switch2_cache_key;
+#endif
 
 /* ---------- paths */
 
@@ -939,8 +963,19 @@ static void *compile_thread(void *context)
 		int ok;
 
 		pthread_mutex_lock(&dksh.lock);
-		while (!dksh.queue_count)
+		while (!dksh.queue_count
+#ifdef __SWITCH2__
+			&& !dksh.stopping
+#endif
+		)
 			pthread_cond_wait(&dksh.queue_condition, &dksh.lock);
+#ifdef __SWITCH2__
+		if (dksh.stopping)
+		{
+			pthread_mutex_unlock(&dksh.lock);
+			break;
+		}
+#endif
 		/* the most urgent entry: the lowest priority, the first queued
 		among equals */
 		pick = 0;
@@ -1175,7 +1210,18 @@ static void *writer_thread(void *unused)
 	{
 		unsigned written = 0, failed = 0;
 
+#ifdef __SWITCH2__
+		for (int i = 0; i < DKSH_WRITE_INTERVAL * 10; i++)
+		{
+			usleep(100000);
+			pthread_mutex_lock(&dksh.lock);
+			int stop = dksh.stopping;
+			pthread_mutex_unlock(&dksh.lock);
+			if (stop) return NULL;
+		}
+#else
 		sleep(DKSH_WRITE_INTERVAL);
+#endif
 		for (;;)
 		{
 			struct dksh_pending pending;
@@ -1249,6 +1295,12 @@ static void service_start(void)
 	if (dksh.started)
 		return;
 	dksh.started = 1;
+#ifdef __SWITCH2__
+	switch2_shader_cache_key_init(&switch2_cache_key, 6, 2, HOST_DK_SHADER_COMPILE_FLAGS);
+	host_logf(HOST_LOG_INFO, "dk shader: Ampere cache key %016llx (DEKO3D=%u UAM2=%s)",
+		(unsigned long long)switch2_cache_key.digest, switch2_cache_key.deko3d,
+		switch2_cache_key.uam2);
+#endif
 	pthread_mutex_init(&dksh.lock, NULL);
 	pthread_cond_init(&dksh.queue_condition, NULL);
 	pthread_cond_init(&dksh.load_condition, NULL);
@@ -1262,11 +1314,15 @@ static void service_start(void)
 		core: host_thread.c) */
 		for (index = 0; index < DKSH_COMPILE_THREADS; index++)
 		{
+#ifdef __SWITCH2__
+			if (pthread_create(&dksh.workers[index], &attributes, compile_thread, (void *)(intptr_t)index) != 0)
+				break;
+#else
 			pthread_t thread;
-
 			if (pthread_create(&thread, &attributes, compile_thread, (void *)(intptr_t)index) != 0)
 				break;
 			pthread_detach(thread);
+#endif
 			dksh.compile_threads++;
 		}
 		if (!dksh.compile_threads)
@@ -1277,23 +1333,33 @@ static void service_start(void)
 				HOST_DK_UAM_COMMIT);
 	}
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&dksh.writer, &attributes, writer_thread, NULL) == 0)
+			dksh.writer_started = 1;
+		else
+#else
 		pthread_t writer;
-
 		if (pthread_create(&writer, &attributes, writer_thread, NULL) == 0)
 			pthread_detach(writer);
 		else
+#endif
 			host_logf(HOST_LOG_ERROR, "dk shader: the writer thread could not be made; compiled shaders are kept "
 				"for this run only");
 	}
 	{
+#ifdef __SWITCH2__
+		if (pthread_create(&dksh.loader, &attributes, loader_thread, NULL) == 0)
+			dksh.loader_started = 1;
+		else
+#else
 		pthread_t loader;
-
 		if (pthread_create(&loader, &attributes, loader_thread, NULL) == 0)
 		{
 			pthread_detach(loader);
 			dksh.loader_started = 1;
 		}
 		else
+#endif
 			host_logf(HOST_LOG_WARN, "dk shader: the loader thread could not be made; shaders are loaded on the "
 				"game thread");
 	}
@@ -1427,6 +1493,10 @@ static uint32_t shader_load(uint64_t hash, uint32_t stage)
 			pthread_mutex_unlock(&dksh.lock);
 		}
 	}
+#ifdef __SWITCH2__
+	if (from_memory)
+		switch2_perf_renderer_shader_hit(1);
+#endif
 	if (contents && size < (long)sizeof(header))
 	{
 		free(contents);
@@ -1434,6 +1504,9 @@ static uint32_t shader_load(uint64_t hash, uint32_t stage)
 	}
 	if (!contents)
 	{
+#ifdef __SWITCH2__
+		switch2_perf_renderer_shader_miss();
+#endif
 		/* listed, but gone or unreadable: compiled again rather than read
 		again */
 		pthread_mutex_lock(&dksh.lock);
@@ -1566,8 +1639,19 @@ static void *loader_thread(void *unused)
 		u64 started_ns;
 
 		pthread_mutex_lock(&dksh.lock);
-		while (!dksh.load_count)
+		while (!dksh.load_count
+#ifdef __SWITCH2__
+			&& !dksh.stopping
+#endif
+		)
 			pthread_cond_wait(&dksh.load_condition, &dksh.lock);
+#ifdef __SWITCH2__
+		if (dksh.stopping)
+		{
+			pthread_mutex_unlock(&dksh.lock);
+			break;
+		}
+#endif
 		hash = dksh.load_queue[0].hash;
 		stage = dksh.load_queue[0].stage;
 		memmove(&dksh.load_queue[0], &dksh.load_queue[1], (dksh.load_count - 1) * sizeof(dksh.load_queue[0]));
@@ -1619,9 +1703,36 @@ static void *loader_thread(void *unused)
 	return NULL;
 }
 
+#ifdef __SWITCH2__
+void host_dk_shaders_shutdown(void)
+{
+	uint32_t index;
+	if (!dksh.started) return;
+	pthread_mutex_lock(&dksh.lock);
+	dksh.stopping = 1;
+	pthread_cond_broadcast(&dksh.queue_condition);
+	pthread_cond_broadcast(&dksh.load_condition);
+	pthread_mutex_unlock(&dksh.lock);
+	for (int i = 0; i < dksh.compile_threads; i++)
+		pthread_join(dksh.workers[i], NULL);
+	if (dksh.loader_started) pthread_join(dksh.loader, NULL);
+	if (dksh.writer_started) pthread_join(dksh.writer, NULL);
+	for (index = 0; index < dksh.queue_count; index++) free(dksh.queue[index].glsl);
+	for (index = 0; index < dksh.pending_count; index++) free(dksh.pending[index].data);
+	free(dksh.queue);
+	free(dksh.pending);
+	if (dksh.pack) fclose(dksh.pack);
+	if (dksh.code_memory) dkMemBlockDestroy(dksh.code_memory);
+	pthread_cond_destroy(&dksh.queue_condition);
+	pthread_cond_destroy(&dksh.load_condition);
+	pthread_mutex_destroy(&dksh.lock);
+	memset(&dksh, 0, sizeof(dksh));
+}
+#endif
+
 /* ---------- the imports (the game thread) */
 
-uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, uint32_t state_out)
+uint32_t host_dk_shader_find(uint32_t stage, uint64_t hash, dk_addr_t state_out)
 {
 	struct dksh_slot *slot;
 	uint32_t handle = 0, state = 0;
@@ -1849,7 +1960,7 @@ uint32_t host_dk_shader_pending_urgent(uint32_t priority)
 	return pending;
 }
 
-void host_dk_shader_compile(uint32_t stage, uint64_t hash, uint32_t glsl, uint32_t glsl_size, uint32_t priority)
+void host_dk_shader_compile(uint32_t stage, uint64_t hash, dk_addr_t glsl, uint32_t glsl_size, uint32_t priority)
 {
 	struct dksh_request request;
 	uint32_t index;

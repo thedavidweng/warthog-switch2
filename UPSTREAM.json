@@ -1,0 +1,111 @@
+{
+  "switch2_version": "0.9.2-beta.1",
+  "schema": 1,
+  "description": "The exact revisions Warthog for Switch 2 builds against and the references it was reviewed against. Every pin is a full commit hash; nothing floats. This file is the single authority for dependency versions (AGENTS.md, 'Dependency pinning authority').",
+  "upstream": {
+    "repository": "https://github.com/ChupathingyCE/warthog-switch",
+    "commit": "366f43cbe060fcc554c00d834075d5d8f7f8e534",
+    "release": "build-7",
+    "version": "0.9.1a",
+    "license": "GPL-3.0-or-later",
+    "note": "The Switch port this repository forks. Its history, authorship and licence are preserved; port/switch/ and `ninja switch` stay unchanged."
+  },
+  "submodules": {
+    "chupathingyce": {
+      "path": "chupathingyce",
+      "repository": "https://github.com/ChupathingyCE/chupathingyce.git",
+      "commit": "2e5eac00e3d6655e094fbbcd13253ac2b10ee773",
+      "license": "GPL-3.0-or-later",
+      "note": "The game engine, pinned in .gitmodules at the release v0.9.1a. Fixes the Switch needs that upstream does not have yet live in port/switch/overrides/ and leave this pin alone."
+    }
+  },
+  "dependencies": {
+    "ounce-devkit": {
+      "repository": "https://github.com/ouncebrew/ounce-devkit",
+      "commit": "5e957599bd498643d82e5470aec80da67a12685d",
+      "release": "devkit-20261117",
+      "license": "MIT",
+      "note": "The Switch 2 devkitPro image and pacman repository this port is built in. Base image devkitpro/devkita64:20260219@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282."
+    },
+    "libounce": {
+      "repository": "https://github.com/ouncebrew/libounce",
+      "commit": "03af07a739a9a3b48704500cffcd6155692cc194",
+      "release": "20261125",
+      "license": "ISC",
+      "note": "The Switch 2 platform layer: switch2_rules, cmake/Switch2.cmake, libnx.a and -D__SWITCH2__. Its jitCreate checks envIsSyscallHinted(0x4B)/envIsSyscallHinted(0x4C) before falling back to libkaihen, which is what decides where executable guest memory can live."
+    },
+    "kaihen": {
+      "repository": "https://github.com/ouncebrew/kaihen",
+      "commit": "3b23b5dc6e75539855eca69ffdda371ce69631bb",
+      "release": "20261123",
+      "license": "ISC",
+      "note": "The libkaihen client library installed into portlibs/switch2 (kaihen.h, libkaihen.a, kaihen-jit.o). The kaiHEN environment it talks to is GPL-2.0 and is assumed, never modified."
+    },
+    "drako3d": {
+      "repository": "https://github.com/ouncebrew/drako3d",
+      "commit": "93ba2e7fbf2d3dc648f9f9f08e8b3aef4a70945d",
+      "release": "0.5.0",
+      "license": "Zlib",
+      "role": "production-renderer",
+      "note": "Native Ampere (GA10F) low-level GPU API that preserves Deko3D's Dk*/dk::* API, so the Switch 1 renderer is reused rather than forked. Built with GPU_ARCH=ampere."
+    },
+    "uam2": {
+      "repository": "https://github.com/ouncebrew/uam2",
+      "commit": "11f145faa1c13bc78da3c8bea55160b4cd672e40",
+      "release": "0.1.0",
+      "license": "Zlib",
+      "note": "Ampere SM 8.6 NAK shader compiler defining DEKO3D=200 (Switch 1's UAM defines DEKO3D=100). Mesa 26.3.0 is MIT. Built from pinned source with meson setup build-switch2 --cross-file cross/switch2.cross -Druntime=true for libuam2rt.a."
+    },
+    "drakotools": {
+      "repository": "https://github.com/ouncebrew/drakotools",
+      "commit": "6569f54518b6cea88ef59c1b9486b3d163d31313",
+      "license": "GPL-3.0",
+      "role": "inspection-tools",
+      "note": "Ampere Drako3D test and inspection utilities. Not linked into the program."
+    },
+    "ouncevk": {
+      "repository": "https://github.com/ouncebrew/ouncevk",
+      "commit": "97d70925dcd8ccab07f308e9dfd0ee5812e4a01c",
+      "release": "20261123.1",
+      "license": "MIT",
+      "role": "contingency",
+      "note": "NVK Vulkan 1.4 and Zink GLES 3.2. Documented contingency only, if Drako3D hits demonstrated hardware blockers; the port ships one production renderer."
+    }
+  },
+  "references": {
+    "dolphin_nx": {
+      "repository": "https://github.com/NaGaa95/dolphin-nx",
+      "commit": "7fb685b353e19a9a5848e9bd658945d1f9cd382a",
+      "version": "1.2.3",
+      "license": "GPL-2.0-or-later",
+      "role": "reference",
+      "note": "The primary Switch 2 reference for the Drako3D compatibility headers, swapchain and descriptor synchronisation, display and VRR pacing, Nmouse input, CPU Boost lifecycle and exit cleanup.",
+      "mit_helpers": {
+        "nx2_platform": {
+          "license": "MIT",
+          "files": [
+            "Source/Core/Common/nx2_platform.h",
+            "Source/Core/Common/nx2_platform.c"
+          ],
+          "note": "Adopted subsets keep the file's copyright, SPDX-License-Identifier: MIT header and the attribution comment naming NaGaa95/dolphin-nx and this revision. The nx2_ filenames and their symbols are the upstream helper's own and stay verbatim."
+        },
+        "nx2_gameshare": {
+          "license": "MIT",
+          "files": [
+            "Source/Core/Common/nx2_gameshare.h",
+            "Source/Core/Common/nx2_gameshare.c"
+          ],
+          "note": "Same terms as nx2_platform. Used for the optional GameShare local multiplayer feature only."
+        }
+      }
+    },
+    "bo2_requiem_nx": {
+      "repository": "https://github.com/HDErick/BO2-Requiem-NX",
+      "commit": "e024537c1009a8930c92f6a940525cc914b7bd09",
+      "version": "0.4.2",
+      "license": "unreleased",
+      "role": "reference-only",
+      "note": "Documents an ILP32 AArch64 guest inside an LP64 NRO with Deko3D on Switch 1 and Drako3D on Switch 2. Its source is not public, so nothing is imported and it never blocks development."
+    }
+  }
+}
