@@ -316,6 +316,8 @@ class ToolchainPinTest(unittest.TestCase):
         for package, pin in (("libounce", "libounce"), ("libkaihen", "kaihen"), ("ouncevk", "ouncevk")):
             version = self.record["dependencies"][pin]["release"]
             self.assertIn(f"${{OUNCE_REPO_URL}}/{package}-{version}-1-any.pkg.tar.zst", self.dockerfile)
+        self.assertIn("RemoteFileSigLevel = Required", self.dockerfile)
+        self.assertNotRegex(self.dockerfile, r"\bdkp-pacman\s+-S[a-z]*y")
         for header in ("drako3d.h", "libdrako3d.a", "uam2rt.h", "libuam2rt.a"):
             with self.subTest(header=header):
                 self.assertIn(header, self.dockerfile)

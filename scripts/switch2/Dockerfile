@@ -26,10 +26,12 @@ RUN set -eux; \
     dkp-pacman-key --add /tmp/ounce.gpg; \
     dkp-pacman-key --lsign-key "${fpr}"; \
     rm -f /tmp/ounce.gpg; \
-    printf '\n[ounce]\nServer = %s\n' "${OUNCE_REPO_URL}" >> "${DEVKITPRO}/pacman/etc/pacman.conf"; \
-    dkp-pacman -Sy --noconfirm --needed \
+    dkp-pacman -Q \
         switch-tools switch-pkg-config dkp-toolchain-vars \
         switch-sdl2 switch-curl switch-mbedtls switch-zlib switch-bzip2; \
+    sed -i 's/^#RemoteFileSigLevel = Optional$/RemoteFileSigLevel = Required/' \
+        "${DEVKITPRO}/pacman/etc/pacman.conf"; \
+    grep -Fx 'RemoteFileSigLevel = Required' "${DEVKITPRO}/pacman/etc/pacman.conf"; \
     dkp-pacman -U --noconfirm --needed \
         --overwrite '/opt/devkitpro/libounce/*' \
         --overwrite '/opt/devkitpro/portlibs/switch2/*' \
