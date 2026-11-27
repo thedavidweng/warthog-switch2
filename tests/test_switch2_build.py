@@ -313,8 +313,8 @@ class ToolchainPinTest(unittest.TestCase):
     def test_the_image_installs_the_platform_the_build_links(self):
         # libounce is the platform, and the three things devkitPro does not
         # ship (Drako3D, the UAM2 runtime, drakotools) are built from source.
-        for package in ("libounce", "libkaihen", "ouncevk"):
-            version = self.record["dependencies"][package]["release"]
+        for package, pin in (("libounce", "libounce"), ("libkaihen", "kaihen"), ("ouncevk", "ouncevk")):
+            version = self.record["dependencies"][pin]["release"]
             self.assertIn(f"${{OUNCE_REPO_URL}}/{package}-{version}-1-any.pkg.tar.zst", self.dockerfile)
         for header in ("drako3d.h", "libdrako3d.a", "uam2rt.h", "libuam2rt.a"):
             with self.subTest(header=header):
