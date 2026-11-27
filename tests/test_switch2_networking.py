@@ -106,6 +106,9 @@ class SocketLifecycleTests(unittest.TestCase):
         self.assertIn("posix_socket", symbols)
         self.assertIn("posix_upnp_forward_udp", symbols)
         self.assertIn("mbedtls_ssl_", platform_symbols)
+        for name in ("net", "tls"):
+            self.assertIn(f"host_{name}.o:", platform_symbols)
+            self.assertNotIn(f"switch2_{name}.o:", platform_symbols)
         browser_source = (ROOT / "chupathingyce/port/linux/src/posix_browser.c").read_text()
         self.assertIn("posix_browser_request", browser_source)
 

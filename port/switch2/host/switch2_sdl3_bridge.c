@@ -454,8 +454,7 @@ bool SDL_RumbleGamepad(SDL_Gamepad *gamepad, Uint16 low, Uint16 high, Uint32 mil
 {
 	if ((uintptr_t)gamepad == SWITCH2_GAMESHARE_GAMEPAD_ID) {
 		(void)milliseconds;
-		nx2GameShareSetGuestRumble(switch2_rumble_level(low) / 65535.0f,
-			switch2_rumble_level(high) / 65535.0f);
+		nx2GameShareSetGuestRumble(low / 65535.0f, high / 65535.0f);
 		return true;
 	}
 	return host_sdl_rumble_gamepad((unsigned int)(uintptr_t)gamepad, low, high, milliseconds) != 0;
@@ -517,10 +516,6 @@ bool SDL_ResumeAudioStreamDevice(SDL_AudioStream *stream)
 bool SDL_InitSubSystem(SDL_InitFlags flags) { return host_sdl_init(flags) != 0; }
 void SDL_Quit(void)
 {
-	unsigned int ids[16];
-	int count = host_sdl_get_gamepads(ids, 16);
-	for (int i = 0; i < count; i++)
-		host_sdl_rumble_gamepad(ids[i], switch2_rumble_level(0), switch2_rumble_level(0), 0);
 	nx2GameShareSetGuestRumble(0.0f, 0.0f);
 	gameshare_guest_connected = false;
 	host_sdl_quit();

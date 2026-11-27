@@ -198,10 +198,11 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
 
     # The include order is libounce's: the Switch 2 portlibs first (UAM2's
     # runtime and kaihen), then the original Switch's (a C-only library may
-    # still come from there), then libounce's own headers. The Switch 2
-    # headers must come first: switch2/ shadows switch/ where the two differ.
+    # still come from there), then libounce's own headers. Use the Switch 2
+    # headers ahead of the shared Switch compatibility headers.
     includes = " ".join([
         f"-I{_quote(PORT_DIR / 'include')}",
+        f"-I{_quote(PORT_DIR.parent / 'switch/include')}",
         f"-I{_quote(portlibs_switch2 / 'include')}",
         f"-I{_quote(devkitpro / 'portlibs' / 'switch' / 'include')}",
         f"-isystem {_quote(libounce / 'include')}",
@@ -288,7 +289,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     objects = []
     for source in sorted((HOST_DIR).glob("*.c")):
         if source.name in {
-            "switch2_tls.c", "switch2_net.c", "switch2_headless_platform.c", "switch2_sdl_headless.c",
+            "switch2_headless_platform.c", "switch2_sdl_headless.c",
             "switch2_posix_compat.c", "headless_engine.c", "switch2_sdl3_bridge.c",
             "switch2_text_nmouse.c"
         }:
@@ -332,7 +333,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     game_objects = engine_build["engine_objects"](n, port, BUILD, code_flags, includes, sln)
     game_archive = BUILD / "libwarthog_game.a"
     n.rule(name="switch2_ar",
-           command=f"{devkitpro / 'devkitA64/bin/aarch64-none-elf-gcc-ar'} rcs $out @$out.rsp",
+           command=f"rm -f $out && {devkitpro / 'devkitA64/bin/aarch64-none-elf-gcc-ar'} rcs $out @$out.rsp",
            description="SWITCH2 AR $out", rspfile="$out.rsp", rspfile_content="$in_newline")
     n.build(outputs=game_archive, rule="switch2_ar", inputs=game_objects)
     n.build(outputs="switch2-engine-game", rule="phony", inputs=game_archive)
@@ -427,7 +428,7 @@ def generate(n: Writer, sln: Any, port: ConsolePort) -> None:
     gfx_obj = BUILD / "probe" / "gfx_probe.c.o"
     n.build(outputs=gfx_obj, rule="switch2_cc", inputs=PORT_DIR / "probe" / "gfx_probe.c",
             implicit=[header, shader_header],
-            variables={"cflags": f"{code_flags} {includes} -I{_quote(PORT_DIR / 'include')}"})
+            variables={"cflags": f"{code_flags} {includes}"})
     gfx_elf = BUILD / "gfx_probe.elf"
     n.build(outputs=gfx_elf, rule="switch2_link", inputs=[gfx_obj])
     gfx_nro = BUILD / "gfx_probe.nro"

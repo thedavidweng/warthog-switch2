@@ -84,23 +84,14 @@ int main(void) {
                             str(HOST / "switch2_input.c"), "-lm", "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 
-    def test_gyro_settings_and_rumble_clamp(self):
+    def test_gyro_sensor_selection_and_rumble_clamp(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = Path(tmp) / "check"
             source = Path(tmp) / "check.c"
             source.write_text(r"""
 #include <assert.h>
-#include <math.h>
 #include "switch2_input.h"
 int main(void) {
-    struct switch2_gyro_settings settings = {
-        SWITCH2_GYRO_ZOOM_ONLY, 2.0f, 3.0f, 1, 1
-    };
-    float yaw, pitch;
-    switch2_gyro_apply(&settings, 0, 1, 2, &yaw, &pitch);
-    assert(yaw == 0 && pitch == 0);
-    switch2_gyro_apply(&settings, 1, 1, 2, &yaw, &pitch);
-    assert(fabsf(yaw + 2) < 0.00001f && fabsf(pitch + 6) < 0.00001f);
     assert(switch2_rumble_level(0) == 0);
     assert(switch2_rumble_level(65535) == 65535);
     assert(switch2_rumble_level(65536) == 65535);

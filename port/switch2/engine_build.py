@@ -176,6 +176,7 @@ def engine_objects(n, port, build, code_flags, includes, sln=None):
 
 def platform_objects(n, port, build, code_flags, includes, release, version, sln=None):
     game = port.game
+    switch = port.root.parent / "switch"
     console, browser = _console_flags(sln)
     rewritten = build / "lp64"
     third = game / "port/third_party"
@@ -204,7 +205,7 @@ def platform_objects(n, port, build, code_flags, includes, release, version, sln
            " -DMBEDTLS_NO_PLATFORM_ENTROPY -DMBEDTLS_ENTROPY_HARDWARE_ALT -DMBEDTLS_PLATFORM_MS_TIME_ALT")
     upnp = (f"-I{third / 'miniupnpc/include'} -I{third / 'miniupnpc/src'} -DMINIUPNP_STATICLIB"
             " -Dif_nametoindex=switch_upnp_if_nametoindex -Dif_indextoname=switch_upnp_if_indextoname"
-            f" -include {port.root / 'host/switch2_upnp_names.h'}")
+            f" -include {switch / 'host/host_upnp_names.h'}")
     objects = []
 
     def add(source, flags, name, dependencies=()):
@@ -229,7 +230,7 @@ def platform_objects(n, port, build, code_flags, includes, release, version, sln
             extra = version_flags if name in VERSION_SOURCES else \
                     f"-idirafter {src}" if name == "text_hires.c" else ""
             add(rewritten / source.relative_to(game), f"{platform} {extra}", source.relative_to(game))
-    guest = port.root.parent / "switch/guest"
+    guest = switch / "guest"
     guest_headers = []
     for source in sorted(guest.glob("*.h")):
         output = rewritten / "switch_guest" / source.name
@@ -258,9 +259,10 @@ def platform_objects(n, port, build, code_flags, includes, release, version, sln
     runner_flags = platform.replace("-DHALO_LINUX_PLATFORM_LAYER", "")
     add(runner_rewritten, f"{runner_flags} -I{rewritten / 'source/math'}",
         Path("bridge/headless_engine.c"))
-    for name, extra in (("switch2_tls.c", tls), ("switch2_net.c", ""), ("switch2_net_map.c", ""), ("switch2_sdl_headless.c", ""),
-                        ("switch2_posix_compat.c", "")):
-        add(port.root / "host" / name, f"{extra} {native} -DHALO_SWITCH2_GRAPHICAL", Path("bridge") / name)
+    add(switch / "host/host_tls.c", f"{tls} {native}", Path("bridge/host_tls.c"))
+    add(switch / "host/host_net.c", native, Path("bridge/host_net.c"))
+    for name in ("switch2_net_map.c", "switch2_sdl_headless.c", "switch2_posix_compat.c"):
+        add(port.root / "host" / name, f"{native} -DHALO_SWITCH2_GRAPHICAL", Path("bridge") / name)
     for name in ("tomlc17/tomlc17.c", "kcp/ikcp.c"):
         add(rewritten / "port/third_party" / name, base + abi, Path("third_party") / name)
     for name in EXPAT_SOURCES:

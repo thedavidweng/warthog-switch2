@@ -73,8 +73,10 @@ Relocates LP64 native pointers in saved memory pools and LRUV caches before vali
 
 Defaults the Switch 2 controller prompt scheme to `PROMPT_SCHEME_NINTENDO`
 before the first input event so menu and overlay prompts match physical Switch
-buttons immediately on boot. This can be proposed upstream under
-`HALO_SWITCH_CONSOLE`.
+buttons immediately on boot. It also routes Joy-Con mouse input, follows the
+last-used shared controller for solo gyro aiming, and handles the gyro recenter
+button. The prompt defaults and recenter action can be proposed to the engine
+independently of the Switch 2 controller routing.
 
 ## port/linux/game/menu_tags.c
 
@@ -105,9 +107,9 @@ LP64 build.
 
 ## source/game/player_control.c
 
-Applies configured Switch 2 zoom sensitivity multipliers to optical mouse and
-gyroscope aiming when zoomed in. This can be proposed upstream under
-`HALO_SWITCH_CONSOLE`.
+Applies the configured zoom sensitivity multipliers to optical mouse and gyro
+aiming, and levels the view's pitch on a gyro recenter action. The camera
+logic can be proposed to the engine with its input interface.
 
 ## port/linux/game/menu_functions.c
 
