@@ -2246,6 +2246,20 @@ static struct
 } gyro = { 0, 0, 0, 0, 1.0f, 1.0f, (unsigned long)-1 };
 
 static struct switch2_gyro_recenter gyro_recenter[PORT_COUNT];
+static SDL_Gamepad *gyro_sample_source[PORT_COUNT];
+static SDL_Gamepad *gyro_button_source[PORT_COUNT];
+
+static SDL_Gamepad *gyro_gamepad(SDL_Gamepad *gamepads[PORT_COUNT], int count, int port)
+{
+	/* In solo play the shared pads already drive player one's buttons and
+	   sticks. Give gyro to the same pad the player most recently used. */
+	if (port == 0 && !pc_menu_split_players())
+		for (int other = 1; other < count; other++)
+			if (port_gamepad_shared[other] && gamepads[other] &&
+				SDL_GetGamepadID(gamepads[other]) == last_used_gamepad)
+				return gamepads[other];
+	return port_gamepad(gamepads, count, port);
+}
 
 /* (read again when the settings change) */
 static void gyro_settings_read(void)
@@ -2290,10 +2304,15 @@ int halo_linux_gyro_look(short gamepad_index, float *yaw, float *pitch, int *lev
 	if (!gyro.enabled || gamepad_index < 0 || gamepad_index >= PORT_COUNT)
 		return FALSE;
 	count = sdl_gamepads(gamepads);
-	gamepad = port_gamepad(gamepads, count, gamepad_index);
+	gamepad = gyro_gamepad(gamepads, count, gamepad_index);
 	if (!gamepad)
 		return FALSE;
 	host_sdl_gamepad_gyro((unsigned int)(uintptr_t)gamepad, &turn_yaw, &turn_pitch);
+	if (gyro_sample_source[gamepad_index] != gamepad)
+	{
+		gyro_sample_source[gamepad_index] = gamepad;
+		turn_yaw = turn_pitch = 0.0f;
+	}
 	button = &gyro_recenter[gamepad_index];
 	if (gyro.recenter_enabled && (button->down || button->discard_motion))
 	{
@@ -2367,7 +2386,9 @@ static void sdl_gamepad_state(SDL_Gamepad *gamepad, XINPUT_GAMEPAD *pad)
 		int button;
 		BOOL used = left_trigger > 64 || right_trigger > 64 ||
 			abs(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX)) > 16000 ||
-			abs(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY)) > 16000;
+			abs(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY)) > 16000 ||
+			abs(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX)) > 16000 ||
+			abs(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY)) > 16000;
 
 		for (button = 0; button < SDL_GAMEPAD_BUTTON_COUNT && !used; button++)
 			used = SDL_GetGamepadButton(gamepad, (SDL_GamepadButton)button);
@@ -2646,13 +2667,18 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 
 	gyro_settings_read();
 	{
-		SDL_Gamepad *gamepad = port_gamepad(gamepads, count, port);
+		SDL_Gamepad *gamepad = gyro_gamepad(gamepads, count, port);
 		BOOL active = gyro.enabled && gyro.recenter_enabled && gamepad &&
 			!input.menus && !console_is_active() && !chat_typing;
 		BOOL down = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
 #ifdef HALO_GUIDE
 		active = active && !guide_capture;
 #endif
+		if (gyro_button_source[port] != gamepad)
+		{
+			gyro_recenter[port] = (struct switch2_gyro_recenter){ 0 };
+			gyro_button_source[port] = gamepad;
+		}
 		switch2_gyro_recenter_poll(&gyro_recenter[port], active, down, SDL_GetTicks());
 		if (active && down)
 			state->Gamepad.wButtons &= (WORD)~XINPUT_GAMEPAD_DPAD_DOWN;

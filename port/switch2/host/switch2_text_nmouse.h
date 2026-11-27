@@ -53,6 +53,7 @@ size_t switch2_utf8_truncate(char *text, size_t max_bytes);
 void switch2_text_nmouse_start(void);
 void switch2_text_nmouse_stop(void);
 void switch2_text_nmouse_poll(void);
+unsigned switch2_nmouse_tracking_joycons(unsigned npad);
 int switch2_swkbd_prompt(int password);
 
 /* One mask per logical player; bits are L/ZL/R/ZR in that order. */

@@ -1178,8 +1178,13 @@ int host_sdl_rumble_gamepad(uint32_t gamepad, uint32_t low, uint32_t high, uint3
 	}
 	/* (every request the first time, and after that each change; the
 	thread also readies a pad whose controller changed as it sends) */
+#ifdef __SWITCH2__
 	low = switch2_rumble_level(low);
 	high = switch2_rumble_level(high);
+#else
+	low &= UINT16_MAX;
+	high &= UINT16_MAX;
+#endif
 	if (!rumble_pads[pad].requested || rumble_pads[pad].wanted_low != low || rumble_pads[pad].wanted_high != high)
 	{
 		rumble_pads[pad].requested = 1;
@@ -1305,16 +1310,43 @@ static void gyro_ready(int pad)
 	Result result;
 
 	pad_npad(pad, &id, &style);
-	if (gyro_pads[pad].id == id && gyro_pads[pad].style == style && (gyro_pads[pad].started || !style))
+	tag = gyro_style_tag(style, &sensors);
+	/* A pair normally uses the right sensor. Each Joy-Con can enter Nmouse
+	   independently, so only select a sensor that is free for gyro aiming. */
+	sensor = tag ? (sensors == 2 ? 1 : 0) : -1;
+#ifdef __SWITCH2__
+	if (tag == HidNpadStyleTag_NpadJoyDual)
+	{
+		HidNpadJoyDualState state;
+		unsigned connected = 0;
+
+		if (hidGetNpadStatesJoyDual(id, &state, 1))
+		{
+			if (state.attributes & HidNpadAttribute_IsLeftConnected)
+				connected |= SWITCH2_JOYCON_LEFT;
+			if (state.attributes & HidNpadAttribute_IsRightConnected)
+				connected |= SWITCH2_JOYCON_RIGHT;
+		}
+		sensor = switch2_gyro_pair_sensor(connected, switch2_nmouse_tracking_joycons(id));
+	}
+	else if (tag == HidNpadStyleTag_NpadJoyLeft || tag == HidNpadStyleTag_NpadJoyRight)
+	{
+		unsigned side = tag == HidNpadStyleTag_NpadJoyLeft ? SWITCH2_JOYCON_LEFT : SWITCH2_JOYCON_RIGHT;
+		if (switch2_nmouse_tracking_joycons(id) & side)
+			sensor = -1;
+	}
+#endif
+	if (gyro_pads[pad].id == id && gyro_pads[pad].style == style && gyro_pads[pad].sensor == sensor &&
+		(gyro_pads[pad].started || sensor < 0))
 		return;
 	if (gyro_pads[pad].started)
 		hidStopSixAxisSensor(gyro_pads[pad].handles[gyro_pads[pad].sensor]);
 	gyro_pads[pad].id = id;
 	gyro_pads[pad].style = style;
+	gyro_pads[pad].sensor = sensor;
 	gyro_pads[pad].started = 0;
 	gyro_pads[pad].had_sample = 0;
-	tag = gyro_style_tag(style, &sensors);
-	if (!tag)
+	if (sensor < 0)
 		return;
 	result = hidGetSixAxisSensorHandles(gyro_pads[pad].handles, sensors, id, tag);
 	if (R_FAILED(result))
@@ -1323,15 +1355,12 @@ static void gyro_ready(int pad)
 			(unsigned)result);
 		return;
 	}
-	/* a pair's right Joy-Con; the only sensor otherwise */
-	sensor = sensors == 2 ? 1 : 0;
 	result = hidStartSixAxisSensor(gyro_pads[pad].handles[sensor]);
 	if (R_FAILED(result))
 	{
 		host_logf(HOST_LOG_WARN, "gyro: pad %d's sensor did not start: 0x%x", pad, (unsigned)result);
 		return;
 	}
-	gyro_pads[pad].sensor = sensor;
 	gyro_pads[pad].started = 1;
 	host_logf(HOST_LOG_INFO, "gyro: pad %d is npad %d, style %#x, sensor %d", pad, (int)id, (unsigned)style, sensor);
 }

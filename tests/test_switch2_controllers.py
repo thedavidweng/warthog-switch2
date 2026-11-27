@@ -10,6 +10,45 @@ HOST = ROOT / "port/switch2/host"
 
 
 class ControllerInputTest(unittest.TestCase):
+    def test_gyro_follows_the_last_used_shared_pad_in_solo_play(self):
+        source = (ROOT / "port/switch2/overrides/port/linux/src/xinput_sdl.c").read_text()
+        selector = source[source.index("static SDL_Gamepad *gyro_gamepad("):
+                          source.index("/* (read again when the settings change) */", source.index(
+                              "static SDL_Gamepad *gyro_gamepad("))]
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "check.c"
+            executable = probe.with_suffix("")
+            probe.write_text(r"""
+#include <assert.h>
+#include <stddef.h>
+#define PORT_COUNT 4
+typedef struct { int id; } SDL_Gamepad;
+static int split, last_used_gamepad, port_gamepad_shared[PORT_COUNT];
+static int pc_menu_split_players(void) { return split; }
+static int SDL_GetGamepadID(SDL_Gamepad *pad) { return pad->id; }
+static SDL_Gamepad *port_gamepad(SDL_Gamepad **pads, int count, int port) {
+    return port < count ? pads[port] : NULL;
+}
+""" + selector + r"""
+int main(void) {
+    SDL_Gamepad pro = { 1 }, joy = { 2 };
+    SDL_Gamepad *pads[PORT_COUNT] = { &pro, &joy };
+    port_gamepad_shared[1] = 1;
+    last_used_gamepad = pro.id;
+    assert(gyro_gamepad(pads, 2, 0) == &pro);
+    last_used_gamepad = joy.id;
+    assert(gyro_gamepad(pads, 2, 0) == &joy);
+    split = 1;
+    assert(gyro_gamepad(pads, 2, 0) == &pro);
+    assert(gyro_gamepad(pads, 2, 1) == &joy);
+    split = 0;
+    assert(gyro_gamepad(pads, 1, 0) == &pro);
+}
+""")
+            subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            str(probe), "-o", str(executable)], check=True)
+            subprocess.run([str(executable)], check=True)
+
     def test_slots_preserve_player_zero_across_transitions(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = Path(tmp) / "check"
@@ -65,6 +104,12 @@ int main(void) {
     assert(switch2_rumble_level(0) == 0);
     assert(switch2_rumble_level(65535) == 65535);
     assert(switch2_rumble_level(65536) == 65535);
+    unsigned pair = SWITCH2_JOYCON_LEFT | SWITCH2_JOYCON_RIGHT;
+    assert(switch2_gyro_pair_sensor(pair, 0) == 1);
+    assert(switch2_gyro_pair_sensor(pair, SWITCH2_JOYCON_LEFT) == 1);
+    assert(switch2_gyro_pair_sensor(pair, SWITCH2_JOYCON_RIGHT) == 0);
+    assert(switch2_gyro_pair_sensor(pair, pair) == -1);
+    assert(switch2_gyro_pair_sensor(SWITCH2_JOYCON_RIGHT, SWITCH2_JOYCON_RIGHT) == -1);
     return 0;
 }
 """)

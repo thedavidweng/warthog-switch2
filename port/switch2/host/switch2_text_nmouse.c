@@ -6,10 +6,12 @@
 static uint32_t nmouse_suppression[4];
 
 #if defined(__SWITCH2__)
+#include "switch2_input.h"
 #include <SDL3/SDL.h>
 #include <switch.h>
 #include <switch/applets/swkbd.h>
 #include <switch2/services/nmouse.h>
+#include "warthog_log.h"
 
 static int nmouse_mode = SWITCH2_NMOUSE_AUTO;
 static float nmouse_accum_x;
@@ -18,6 +20,7 @@ static float nmouse_accum_y;
 static struct switch2_nmouse_processor nmouse_processor;
 static HidNmouseHandle nmouse_handle;
 static int nmouse_ready;
+static int nmouse_has_handle;
 static int nmouse_active_mode = -1;
 static int keyboard_ready;
 static int mouse_ready;
@@ -115,66 +118,135 @@ static int show_swkbd(int password)
 
 void switch2_text_nmouse_start(void)
 {
+	Result rc;
+
 	hidInitializeKeyboard();
 	hidInitializeMouse();
 	keyboard_ready = mouse_ready = 1;
 	switch2_nmouse_processor_init(&nmouse_processor);
 	nmouse_accum_x = nmouse_accum_y = 0.0f;
 	nmouse_active_mode = -1;
-	if (R_SUCCEEDED(hidInitializeNmouse(NULL, 0, 1920, 1080,
-			HidNmousePointerType_Default))) {
-		hidSetMergedNmouseSourceTypes(nmouse_source_types_for_mode(nmouse_mode));
-		nmouse_ready = R_SUCCEEDED(hidGetMergedNmouseHandle(&nmouse_handle));
-		if (nmouse_ready)
-			nmouse_active_mode = nmouse_mode;
-	}
+	nmouse_has_handle = 0;
+	rc = hidInitializeNmouse(NULL, 0, 1920, 1080, HidNmousePointerType_Default);
+	nmouse_ready = R_SUCCEEDED(rc);
+	if (!nmouse_ready)
+		warthog_log("WARN", "nmouse: initialization failed: 0x%x", (unsigned)rc);
+}
+
+static void nmouse_reset_pointer(void)
+{
+	struct switch2_nmouse_motion motion;
+
+	switch2_nmouse_disconnect(&nmouse_processor, &motion);
+	nmouse_accum_x = nmouse_accum_y = 0.0f;
+	if (motion.button_released & HidMouseButton_Left)
+		push_mouse_button(SDL_BUTTON_LEFT, 0, SWITCH2_NMOUSE_DEVICE_ID);
+	if (motion.button_released & HidMouseButton_Right)
+		push_mouse_button(SDL_BUTTON_RIGHT, 0, SWITCH2_NMOUSE_DEVICE_ID);
+	nmouse_has_handle = 0;
 }
 
 void switch2_text_nmouse_stop(void)
 {
-	struct switch2_nmouse_motion motion;
 	if (nmouse_ready) {
-		switch2_nmouse_disconnect(&nmouse_processor, &motion);
-		nmouse_accum_x = nmouse_accum_y = 0.0f;
-		if (motion.button_released & HidMouseButton_Left)
-			push_mouse_button(SDL_BUTTON_LEFT, 0, SWITCH2_NMOUSE_DEVICE_ID);
-		if (motion.button_released & HidMouseButton_Right)
-			push_mouse_button(SDL_BUTTON_RIGHT, 0, SWITCH2_NMOUSE_DEVICE_ID);
+		nmouse_reset_pointer();
 		hidFinalizeNmouse();
 		nmouse_ready = 0;
 		nmouse_active_mode = -1;
-		memset(nmouse_suppression, 0, sizeof(nmouse_suppression));
 	}
 	keyboard_ready = mouse_ready = 0;
 }
 
 void switch2_text_nmouse_configure(int mode, float sensitivity_x, float sensitivity_y, int invert_y)
 {
-	struct switch2_nmouse_motion motion;
-
 	if (mode < SWITCH2_NMOUSE_OFF || mode > SWITCH2_NMOUSE_BOTH)
 		mode = SWITCH2_NMOUSE_AUTO;
 	nmouse_mode = mode;
 	nmouse_processor.settings.sensitivity_x = sensitivity_x > 0.0f ? sensitivity_x : 1.0f;
 	nmouse_processor.settings.sensitivity_y = sensitivity_y > 0.0f ? sensitivity_y : 1.0f;
 	nmouse_processor.settings.invert_y = invert_y ? 1 : 0;
+}
+
+unsigned switch2_nmouse_tracking_joycons(unsigned npad)
+{
+	HidNmouseHandle handles[HID_NMOUSE_HANDLES_PER_NPAD];
+	s32 count;
+	unsigned tracking = 0;
+	u32 sources = nmouse_source_types_for_mode(nmouse_mode);
+
+	if (!nmouse_ready || nmouse_mode == SWITCH2_NMOUSE_OFF ||
+		R_FAILED(hidGetNmouseHandles(handles, HID_NMOUSE_HANDLES_PER_NPAD, (HidNpadIdType)npad, &count)))
+		return 0;
+	for (s32 i = 0; i < count; i++) {
+		u32 type;
+		HidNmouseStateWithDelta state;
+		size_t written;
+
+		if (R_FAILED(hidGetNmouseTypeSet(handles[i], &type)) || !(type & sources) ||
+			R_FAILED(hidGetNmouseStatesWithDelta(handles[i], &state, 1, &written)) || !written)
+			continue;
+		/* Per-device bit 1 reports optical tracking, even with zero delta. */
+		if (state.flags & BIT(1)) {
+			if (type == HidNmouseType_JoyLeft)
+				tracking |= SWITCH2_JOYCON_LEFT;
+			if (type == HidNmouseType_JoyRight)
+				tracking |= SWITCH2_JOYCON_RIGHT;
+		}
+	}
+	return tracking;
+}
+
+static void nmouse_poll(void)
+{
+	HidNmouseStateWithDelta nmouse[16];
+	struct switch2_nmouse_motion motion;
+	size_t count = 0, i;
+	Result rc;
+
 	if (!nmouse_ready)
 		return;
-	if (mode == SWITCH2_NMOUSE_OFF) {
-		if (nmouse_active_mode != SWITCH2_NMOUSE_OFF) {
-			switch2_nmouse_disconnect(&nmouse_processor, &motion);
-			nmouse_accum_x = nmouse_accum_y = 0.0f;
-			if (motion.button_released & HidMouseButton_Left)
-				push_mouse_button(SDL_BUTTON_LEFT, 0, SWITCH2_NMOUSE_DEVICE_ID);
-			if (motion.button_released & HidMouseButton_Right)
-				push_mouse_button(SDL_BUTTON_RIGHT, 0, SWITCH2_NMOUSE_DEVICE_ID);
+	if (nmouse_mode != nmouse_active_mode) {
+		nmouse_reset_pointer();
+		nmouse_active_mode = nmouse_mode;
+		if (nmouse_mode != SWITCH2_NMOUSE_OFF) {
+			rc = hidSetMergedNmouseSourceTypes(nmouse_source_types_for_mode(nmouse_mode));
+			if (R_FAILED(rc))
+				warthog_log("WARN", "nmouse: source selection failed: 0x%x", (unsigned)rc);
 		}
-		nmouse_active_mode = SWITCH2_NMOUSE_OFF;
+	}
+	if (nmouse_mode == SWITCH2_NMOUSE_OFF)
+		return;
+	if (!nmouse_has_handle) {
+		if (R_FAILED(hidGetMergedNmouseHandle(&nmouse_handle)))
+			return;
+		nmouse_has_handle = 1;
+		warthog_log("INFO", "nmouse: merged pointer available");
+	}
+	rc = hidGetNmouseStatesWithDelta(nmouse_handle, nmouse, 16, &count);
+	if (R_FAILED(rc)) {
+		nmouse_reset_pointer();
 		return;
 	}
-	if (mode != nmouse_active_mode) {
-		hidSetMergedNmouseSourceTypes(nmouse_source_types_for_mode(mode));
-		nmouse_active_mode = mode;
+	for (i = count; i > 0; --i) {
+		if (!switch2_nmouse_process_accum(&nmouse_processor,
+				nmouse[i - 1].sampling_number,
+				nmouse[i - 1].delta_x, nmouse[i - 1].delta_y,
+				nmouse[i - 1].buttons, nmouse_mode,
+				&nmouse_accum_x, &nmouse_accum_y, &motion))
+			continue;
+		nmouse_suppression[0] =
+			(motion.buttons & HidMouseButton_Left ? 3u : 0u) |
+			(motion.buttons & HidMouseButton_Right ? 12u : 0u);
+		if (motion.xrel || motion.yrel)
+			push_mouse_motion(motion.xrel, motion.yrel, SWITCH2_NMOUSE_DEVICE_ID);
+		if (motion.button_pressed & HidMouseButton_Left)
+			push_mouse_button(SDL_BUTTON_LEFT, 1, SWITCH2_NMOUSE_DEVICE_ID);
+		if (motion.button_released & HidMouseButton_Left)
+			push_mouse_button(SDL_BUTTON_LEFT, 0, SWITCH2_NMOUSE_DEVICE_ID);
+		if (motion.button_pressed & HidMouseButton_Right)
+			push_mouse_button(SDL_BUTTON_RIGHT, 1, SWITCH2_NMOUSE_DEVICE_ID);
+		if (motion.button_released & HidMouseButton_Right)
+			push_mouse_button(SDL_BUTTON_RIGHT, 0, SWITCH2_NMOUSE_DEVICE_ID);
 	}
 }
 
@@ -182,9 +254,7 @@ void switch2_text_nmouse_poll(void)
 {
 	HidKeyboardState keys[17];
 	HidMouseState mice[17];
-	HidNmouseStateWithDelta nmouse[16];
 	size_t count;
-	struct switch2_nmouse_motion motion;
 	unsigned i, key;
 	static uint64_t previous_keys;
 	static uint64_t previous_mouse;
@@ -220,35 +290,7 @@ void switch2_text_nmouse_poll(void)
 					!!(mice[i].buttons & HidMouseButton_Right), 0);
 		}
 	}
-	if (nmouse_ready && nmouse_mode != SWITCH2_NMOUSE_OFF) {
-		{
-			size_t total = 0;
-			count = hidGetNmouseStatesWithDelta(nmouse_handle, nmouse, 16, &total);
-			if (count > total)
-				count = total;
-		}
-		for (i = count; i > 0; --i) {
-			if (!switch2_nmouse_process_accum(&nmouse_processor,
-					nmouse[i - 1].sampling_number,
-					nmouse[i - 1].delta_x, nmouse[i - 1].delta_y,
-					nmouse[i - 1].buttons, nmouse_mode,
-					&nmouse_accum_x, &nmouse_accum_y, &motion))
-				continue;
-			nmouse_suppression[0] =
-				(motion.buttons & HidMouseButton_Left ? 3u : 0u) |
-				(motion.buttons & HidMouseButton_Right ? 12u : 0u);
-			if (motion.xrel || motion.yrel)
-				push_mouse_motion(motion.xrel, motion.yrel, SWITCH2_NMOUSE_DEVICE_ID);
-			if (motion.button_pressed & HidMouseButton_Left)
-				push_mouse_button(SDL_BUTTON_LEFT, 1, SWITCH2_NMOUSE_DEVICE_ID);
-			if (motion.button_released & HidMouseButton_Left)
-				push_mouse_button(SDL_BUTTON_LEFT, 0, SWITCH2_NMOUSE_DEVICE_ID);
-			if (motion.button_pressed & HidMouseButton_Right)
-				push_mouse_button(SDL_BUTTON_RIGHT, 1, SWITCH2_NMOUSE_DEVICE_ID);
-			if (motion.button_released & HidMouseButton_Right)
-				push_mouse_button(SDL_BUTTON_RIGHT, 0, SWITCH2_NMOUSE_DEVICE_ID);
-		}
-	}
+	nmouse_poll();
 }
 
 int switch2_swkbd_prompt(int password)

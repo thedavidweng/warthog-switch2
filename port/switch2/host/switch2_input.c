@@ -127,6 +127,15 @@ uint16_t switch2_rumble_level(uint32_t level)
 	return level > UINT16_MAX ? UINT16_MAX : (uint16_t)level;
 }
 
+int switch2_gyro_pair_sensor(unsigned connected, unsigned mouse_tracking)
+{
+	unsigned available = connected & ~mouse_tracking;
+
+	if (available & SWITCH2_JOYCON_RIGHT)
+		return 1;
+	return available & SWITCH2_JOYCON_LEFT ? 0 : -1;
+}
+
 void switch2_gyro_add(enum switch2_gyro_orientation orientation, int connected,
 	const float rate[3], const float gravity[3], uint64_t delta_ns, float *yaw, float *pitch)
 {

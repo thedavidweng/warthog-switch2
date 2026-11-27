@@ -8,6 +8,13 @@ enum switch2_gyro_orientation {
 	SWITCH2_GYRO_RIGHT
 };
 
+enum switch2_joycon_side {
+	SWITCH2_JOYCON_LEFT = 1u << 0,
+	SWITCH2_JOYCON_RIGHT = 1u << 1
+};
+
+int switch2_gyro_pair_sensor(unsigned connected, unsigned mouse_tracking);
+
 /* libnx uses 0..3 for wireless npads and 32 for the handheld npad.  Keeping
 the values here makes slot selection testable without including libnx. */
 #define SWITCH2_NPAD_NO1 0u
