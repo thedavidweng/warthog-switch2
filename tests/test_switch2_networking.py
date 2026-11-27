@@ -32,7 +32,7 @@ class MapDownloadTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         root = Path(self.directory.name)
         self.library = root / "maps.dylib"
-        subprocess.run(["clang", "-std=c11", "-shared", "-fPIC",
+        subprocess.run(["clang", "-std=gnu11", "-shared", "-fPIC", "-pthread",
                         str(ROOT / "port/switch2/host/switch2_net_map.c"),
                         "-o", str(self.library)], check=True, capture_output=True)
         self.lib = ctypes.CDLL(str(self.library))

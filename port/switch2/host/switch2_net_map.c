@@ -57,7 +57,7 @@ int switch2_net_commit_downloaded_map(const char *part_path, const char *dest_ma
 	char *error, size_t error_size)
 {
 	int file;
-	int result = 0;
+	int result = -1;
 
 	if (!map_file_is_valid(part_path, error, error_size))
 	{

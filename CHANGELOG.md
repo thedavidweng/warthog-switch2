@@ -25,6 +25,8 @@ kaiHEN and uses the pinned ChupathingyCE 0.9.1a engine.
   may grant a lower refresh rate.
 - Accepts zlib-compressed retail Xbox maps. Players supply their own retail
   Xbox disc image or extracted maps.
+- Map downloads report a conflict when a destination map already exists and
+  preserve the existing file.
 
 ### Verification
 
