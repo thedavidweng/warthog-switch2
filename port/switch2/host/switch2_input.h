@@ -46,4 +46,14 @@ void switch2_gyro_apply(const struct switch2_gyro_settings *settings, int zoomed
 uint16_t switch2_rumble_level(uint32_t level);
 
 void switch2_gyro_add(enum switch2_gyro_orientation orientation, int connected,
-	float x, float y, uint64_t delta_ns, float *yaw, float *pitch);
+	const float rate[3], const float gravity[3], uint64_t delta_ns, float *yaw, float *pitch);
+
+struct switch2_gyro_recenter {
+	uint64_t pressed_at;
+	int down;
+	int tracking;
+	int discard_motion;
+	int level_view;
+};
+
+void switch2_gyro_recenter_poll(struct switch2_gyro_recenter *button, int active, int down, uint64_t now);

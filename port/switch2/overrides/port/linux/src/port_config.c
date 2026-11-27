@@ -836,6 +836,9 @@ static const struct config_setting config_settings[] =
 	{ "input.gyro_zoom_sensitivity", _config_real, "0.75", "HALO_GYRO_ZOOM_SENSITIVITY",
 		_environment_value, _platform_android,
 		"Gyroscope sensitivity multiplier while zoomed in with a scope." },
+	{ "input.gyro_recenter", _config_boolean, "true", "HALO_GYRO_RECENTER",
+		_environment_value, _platform_android,
+		"Use D-pad Down to level the view on a tap and pause gyro aiming while held." },
 	{ "input.joycon_mouse", _config_string, "\"auto\"", "HALO_JOYCON_MOUSE",
 		_environment_value, _platform_android,
 		"Switch 2 Joy-Con 2 optical mouse aiming mode: \"auto\", \"right\",\n"

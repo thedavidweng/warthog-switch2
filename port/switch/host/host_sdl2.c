@@ -1246,7 +1246,7 @@ static HidNpadStyleTag gyro_style_tag(u32 style, int *sensors)
 }
 
 /* adds this sample's turn. Positive yaw is to the player's right, positive
-pitch looks up. */
+pitch looks up in the original Switch conversion below. */
 static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float *yaw, float *pitch)
 {
 #ifdef __SWITCH2__
@@ -1254,8 +1254,11 @@ static void gyro_add_sample(u32 style, const HidSixAxisSensorState *state, float
 	HidNpadStyleTag tag = gyro_style_tag(style, &sensors);
 	enum switch2_gyro_orientation orientation = tag == HidNpadStyleTag_NpadJoyRight ? SWITCH2_GYRO_RIGHT :
 		tag == HidNpadStyleTag_NpadJoyLeft ? SWITCH2_GYRO_LEFT : SWITCH2_GYRO_NORMAL;
+	const float rate[] = { state->angular_velocity.x, state->angular_velocity.y, state->angular_velocity.z };
+	const float gravity[] = { state->acceleration.x, state->acceleration.y, state->acceleration.z };
+
 	switch2_gyro_add(orientation, !!(state->attributes & HidSixAxisSensorAttribute_IsConnected),
-		state->angular_velocity.x, state->angular_velocity.y, state->delta_time, yaw, pitch);
+		rate, gravity, state->delta_time, yaw, pitch);
 #else
 	float x = state->angular_velocity.x;
 	float y = state->angular_velocity.y;
@@ -1385,8 +1388,10 @@ void host_sdl_gamepad_gyro(uint32_t gamepad, float *yaw, float *pitch)
 	if (pad < 0 || pad >= RUMBLE_PADS)
 		return;
 	gyro_read((int)pad, yaw, pitch);
+#ifndef __SWITCH2__
 	*yaw *= GYRO_SCALE;
 	*pitch *= GYRO_SCALE;
+#endif
 }
 
 /* ---------- audio

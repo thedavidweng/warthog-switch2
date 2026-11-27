@@ -227,6 +227,9 @@ are the ones most relevant on Switch 2:
 
 Video Setup has rows for `INTERNAL RESOLUTION`, `OUTPUT REFRESH` and
 `SMOOTH MOTION`. The gyro settings are on the `GYRO` page of Controls Setup.
+With gyro on, tap D-pad Down to level the view without changing its heading.
+Hold it to pause gyro aiming while you reposition the controller, then release
+it to resume. The `RECENTER BUTTON` setting can turn off this binding.
 There is no `QUIT` on the main menu: press HOME to leave.
 
 The other `debug.*` settings in the file are for finding renderer and

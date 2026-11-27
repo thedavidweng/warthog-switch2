@@ -82,23 +82,62 @@ int main(void) {
 #include <math.h>
 #include "switch2_input.h"
 int main(void) {
+    const float upright[] = { 0, -1, 0 };
+    const float flat[] = { 0, 0, -1 };
+    const float tilted[] = { 0, -0.70710678f, -0.70710678f };
     float yaw = 0, pitch = 0;
-    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, 0.5f, -1.0f, 20000000, &yaw, &pitch);
-    assert(fabsf(yaw - 0.02f) < 0.00001f);
-    assert(fabsf(pitch + 0.01f) < 0.00001f);
-    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, 0.001f, 0.001f, 20000000, &yaw, &pitch);
-    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 0, 5, 5, 20000000, &yaw, &pitch);
-    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, 5, 5, 100000001, &yaw, &pitch);
-    assert(fabsf(yaw - 0.02f) < 0.00001f);
-    assert(fabsf(pitch + 0.01f) < 0.00001f);
+    /* A right turn and upward tilt, measured in turns per second. */
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ 0.5f, -1.0f, 0 }, upright, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw + 0.12566371f) < 0.00001f);
+    assert(fabsf(pitch - 0.06283185f) < 0.00001f);
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ 0.001f, 0.001f, 0 }, upright, 20000000, &yaw, &pitch);
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 0, (float[]){ 5, 5, 0 }, upright, 20000000, &yaw, &pitch);
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ 5, 5, 0 }, upright, 100000001, &yaw, &pitch);
+    assert(fabsf(yaw + 0.12566371f) < 0.00001f);
+    assert(fabsf(pitch - 0.06283185f) < 0.00001f);
     yaw = pitch = 0;
-    switch2_gyro_add(SWITCH2_GYRO_RIGHT, 1, 1, 2, 20000000, &yaw, &pitch);
-    assert(fabsf(yaw + 0.02f) < 0.00001f);
-    assert(fabsf(pitch - 0.04f) < 0.00001f);
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ 0, 0, -1 }, flat, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw + 0.12566371f) < 0.00001f && pitch == 0);
     yaw = pitch = 0;
-    switch2_gyro_add(SWITCH2_GYRO_LEFT, 1, 1, 2, 20000000, &yaw, &pitch);
-    assert(fabsf(yaw - 0.02f) < 0.00001f);
-    assert(fabsf(pitch + 0.04f) < 0.00001f);
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, tilted, tilted, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw + 0.12566371f) < 0.00001f && pitch == 0);
+    yaw = pitch = 0;
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ 0, 1, 0 }, flat, 20000000, &yaw, &pitch);
+    assert(yaw == 0 && pitch == 0);
+    /* A fine correction at 1.8 degrees per second. */
+    switch2_gyro_add(SWITCH2_GYRO_NORMAL, 1, (float[]){ -0.005f, 0.005f, 0 }, upright, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw - 0.00062832f) < 0.00001f);
+    assert(fabsf(pitch + 0.00062832f) < 0.00001f);
+    yaw = pitch = 0;
+    switch2_gyro_add(SWITCH2_GYRO_RIGHT, 1, (float[]){ 1, 2, 0 }, (float[]){ -1, 0, 0 }, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw - 0.12566371f) < 0.00001f);
+    assert(fabsf(pitch + 0.25132741f) < 0.00001f);
+    yaw = pitch = 0;
+    switch2_gyro_add(SWITCH2_GYRO_LEFT, 1, (float[]){ 1, 2, 0 }, (float[]){ 1, 0, 0 }, 20000000, &yaw, &pitch);
+    assert(fabsf(yaw + 0.12566371f) < 0.00001f);
+    assert(fabsf(pitch - 0.25132741f) < 0.00001f);
+
+    struct switch2_gyro_recenter button = { 0 };
+    switch2_gyro_recenter_poll(&button, 1, 1, 100);
+    assert(button.down && button.discard_motion && !button.level_view);
+    button.discard_motion = 0;
+    switch2_gyro_recenter_poll(&button, 1, 0, 200);
+    assert(!button.down && button.discard_motion && button.level_view);
+    button.level_view = button.discard_motion = 0;
+    switch2_gyro_recenter_poll(&button, 1, 0, 210);
+    assert(!button.discard_motion && !button.level_view);
+
+    switch2_gyro_recenter_poll(&button, 1, 1, 300);
+    switch2_gyro_recenter_poll(&button, 1, 1, 740);
+    assert(button.down && button.discard_motion && !button.level_view);
+    button.discard_motion = 0;
+    switch2_gyro_recenter_poll(&button, 1, 0, 750);
+    assert(!button.down && button.discard_motion && !button.level_view);
+
+    switch2_gyro_recenter_poll(&button, 0, 1, 900);
+    switch2_gyro_recenter_poll(&button, 1, 1, 910);
+    switch2_gyro_recenter_poll(&button, 1, 0, 920);
+    assert(!button.down && button.discard_motion && !button.level_view);
     return 0;
 }
 """)

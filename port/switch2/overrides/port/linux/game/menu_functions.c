@@ -3521,7 +3521,7 @@ static char const *controls_page_view(struct widget_instance *list)
 	Switch's rows: tools/switch_menus.py in its port) */
 #ifdef __SWITCH2__
 	if (spinner_shown(list, "page_spinner") == 3)
-		return "nmouse";
+		return "nm";
 #endif
 	if (spinner_shown(list, "page_spinner") == 2)
 		return "gyro";

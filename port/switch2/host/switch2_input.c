@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "switch2_input.h"
+#include <math.h>
 
 void switch2_slots_init(struct switch2_controller_slots *slots)
 {
@@ -127,22 +128,54 @@ uint16_t switch2_rumble_level(uint32_t level)
 }
 
 void switch2_gyro_add(enum switch2_gyro_orientation orientation, int connected,
-	float x, float y, uint64_t delta_ns, float *yaw, float *pitch)
+	const float rate[3], const float gravity[3], uint64_t delta_ns, float *yaw, float *pitch)
 {
-	float seconds;
+	const float radians_per_turn = 6.283185307f;
+	const float noise_rad_per_second = 0.01f;
+	const int pitch_axis = orientation == SWITCH2_GYRO_NORMAL ? 0 : 1;
+	const int turn_axis = 1 - pitch_axis;
+	float gravity_length, turn_rate, pitch_rate, seconds;
+
 	if (!connected || !delta_ns || delta_ns > 100000000ULL)
 		return;
-	if (x < 0.01f && x > -0.01f) x = 0;
-	if (y < 0.01f && y > -0.01f) y = 0;
-	seconds = (float)delta_ns * 1.0e-9f;
-	if (orientation == SWITCH2_GYRO_RIGHT) {
-		*yaw -= x * seconds;
-		*pitch += y * seconds;
-	} else if (orientation == SWITCH2_GYRO_LEFT) {
-		*yaw += x * seconds;
-		*pitch -= y * seconds;
-	} else {
-		*yaw -= y * seconds;
-		*pitch -= x * seconds;
+
+	/* Player-space turn (JoyShockMapper): use gravity to combine the two
+	 * non-pitch axes. A flat and an upright controller can both turn. */
+	gravity_length = sqrtf(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2]);
+	turn_rate = 0.0f;
+	if (gravity_length > 0.0f) {
+		float along_gravity = (rate[turn_axis] * gravity[turn_axis] + rate[2] * gravity[2]) / gravity_length;
+		float turn_magnitude = sqrtf(rate[turn_axis] * rate[turn_axis] + rate[2] * rate[2]);
+		turn_rate = -copysignf(fminf(fabsf(along_gravity) * 1.41421356f, turn_magnitude), along_gravity);
 	}
+	pitch_rate = orientation == SWITCH2_GYRO_RIGHT ? -rate[pitch_axis] : rate[pitch_axis];
+
+	/* HID reports turns per second. Halo's facing deltas are radians. */
+	turn_rate *= radians_per_turn;
+	pitch_rate *= radians_per_turn;
+	seconds = (float)delta_ns * 1.0e-9f;
+	if (fabsf(turn_rate) >= noise_rad_per_second)
+		*yaw += turn_rate * seconds;
+	if (fabsf(pitch_rate) >= noise_rad_per_second)
+		*pitch += pitch_rate * seconds;
+}
+
+void switch2_gyro_recenter_poll(struct switch2_gyro_recenter *button, int active, int down, uint64_t now)
+{
+	if (!active) {
+		*button = (struct switch2_gyro_recenter){ .down = down };
+		return;
+	}
+	if (down && !button->down) {
+		button->pressed_at = now;
+		button->tracking = 1;
+	}
+	if (!down && button->down) {
+		if (button->tracking && now - button->pressed_at < 250)
+			button->level_view = 1;
+		button->tracking = 0;
+	}
+	/* Drop samples queued through the release poll as well. */
+	button->discard_motion |= down || button->down;
+	button->down = down;
 }

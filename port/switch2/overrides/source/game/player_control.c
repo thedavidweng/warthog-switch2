@@ -1408,12 +1408,16 @@ static void get_local_player_input_blob(
 						as the mouse's turn above, with its own invert; with
 						input.gyro_aim = "zoom" only while zoomed in, for fine aiming
 						(read and dropped otherwise, so that zooming in does not jump) */
-						extern int halo_linux_gyro_look(short gamepad_index, real *yaw, real *pitch);
+						extern int halo_linux_gyro_look(short gamepad_index, real *yaw, real *pitch, int *level_view);
 						extern int halo_linux_gyro_zoom_only(void);
 						real gyro_yaw;
 						real gyro_pitch;
+						int level_view;
+						int gyro_turned = halo_linux_gyro_look(gamepad_index, &gyro_yaw, &gyro_pitch, &level_view);
 
-						if (halo_linux_gyro_look(gamepad_index, &gyro_yaw, &gyro_pitch) &&
+						if (level_view)
+							input->facing_delta.pitch = -control->desired_angles.pitch;
+						else if (gyro_turned &&
 							!(control->zoom_level == NONE && halo_linux_gyro_zoom_only()))
 						{
 							if (player->unit_index != NONE && control->zoom_level != NONE)

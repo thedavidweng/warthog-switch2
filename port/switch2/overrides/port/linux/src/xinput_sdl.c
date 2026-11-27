@@ -43,6 +43,7 @@ drive the controller.
 #include "touch_input.h"
 #include "controller_layout.h"
 #include "halo_keyboard.h"
+#include "switch2_input.h"
 #ifdef HALO_GUIDE
 #include "guide_input.h"
 #include "delta_input_rules.h"
@@ -2241,7 +2242,10 @@ static struct
 	float sensitivity_horizontal;
 	float sensitivity_vertical;
 	unsigned long read_at;
+	int recenter_enabled;
 } gyro = { 0, 0, 0, 0, 1.0f, 1.0f, (unsigned long)-1 };
+
+static struct switch2_gyro_recenter gyro_recenter[PORT_COUNT];
 
 /* (read again when the settings change) */
 static void gyro_settings_read(void)
@@ -2258,6 +2262,7 @@ static void gyro_settings_read(void)
 	gyro.invert_vertical = config_boolean("input.gyro_invert_vertical");
 	gyro.sensitivity_horizontal = (float)config_real("input.gyro_sensitivity_horizontal");
 	gyro.sensitivity_vertical = (float)config_real("input.gyro_sensitivity_vertical");
+	gyro.recenter_enabled = config_boolean("input.gyro_recenter");
 }
 
 /* whether the gyroscope aims only while the player is zoomed in
@@ -2270,23 +2275,33 @@ int halo_linux_gyro_zoom_only(void)
 
 /* radians of yaw and pitch the pad on port gamepad_index turned since the
 last call, with the settings' sensitivity and invert; FALSE for nothing */
-int halo_linux_gyro_look(short gamepad_index, float *yaw, float *pitch)
+int halo_linux_gyro_look(short gamepad_index, float *yaw, float *pitch, int *level_view)
 {
 	SDL_Gamepad *gamepads[PORT_COUNT];
 	SDL_Gamepad *gamepad;
+	struct switch2_gyro_recenter *button;
 	int count;
 	float turn_yaw, turn_pitch;
 
 	*yaw = 0.0f;
 	*pitch = 0.0f;
+	*level_view = 0;
 	gyro_settings_read();
-	if (!gyro.enabled || gamepad_index < 0)
+	if (!gyro.enabled || gamepad_index < 0 || gamepad_index >= PORT_COUNT)
 		return FALSE;
 	count = sdl_gamepads(gamepads);
 	gamepad = port_gamepad(gamepads, count, gamepad_index);
 	if (!gamepad)
 		return FALSE;
 	host_sdl_gamepad_gyro((unsigned int)(uintptr_t)gamepad, &turn_yaw, &turn_pitch);
+	button = &gyro_recenter[gamepad_index];
+	if (gyro.recenter_enabled && (button->down || button->discard_motion))
+	{
+		*level_view = button->level_view;
+		button->level_view = 0;
+		button->discard_motion = 0;
+		return FALSE;
+	}
 	*yaw = (gyro.invert_horizontal ? -turn_yaw : turn_yaw) * gyro.sensitivity_horizontal;
 	*pitch = (gyro.invert_vertical ? -turn_pitch : turn_pitch) * gyro.sensitivity_vertical;
 	return *yaw != 0.0f || *pitch != 0.0f;
@@ -2538,6 +2553,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 {
 	int port = controller_port(device);
 	SDL_Gamepad *gamepads[PORT_COUNT];
+	struct platform_input_state input;
 	int count;
 
 	memset(state, 0, sizeof(*state));
@@ -2548,11 +2564,9 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 #endif
 	platform_pump_events();
 	count = sdl_gamepads(gamepads);
+	platform_input_read(&input, port == 0);
 	if (port == 0)
 	{
-		struct platform_input_state input;
-
-		platform_input_read(&input, TRUE);
 		mouse_poll(&input);
 		wheel_update();
 		keyboard_actions_held = 0;
@@ -2628,6 +2642,20 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
 	else if (port_gamepad(gamepads, count, port))
 	{
 		sdl_gamepad_state(port_gamepad(gamepads, count, port), &state->Gamepad);
+	}
+
+	gyro_settings_read();
+	{
+		SDL_Gamepad *gamepad = port_gamepad(gamepads, count, port);
+		BOOL active = gyro.enabled && gyro.recenter_enabled && gamepad &&
+			!input.menus && !console_is_active() && !chat_typing;
+		BOOL down = gamepad && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+#ifdef HALO_GUIDE
+		active = active && !guide_capture;
+#endif
+		switch2_gyro_recenter_poll(&gyro_recenter[port], active, down, SDL_GetTicks());
+		if (active && down)
+			state->Gamepad.wButtons &= (WORD)~XINPUT_GAMEPAD_DPAD_DOWN;
 	}
 
 	if (memcmp(&state->Gamepad, &controllers[port].previous, sizeof(state->Gamepad)))

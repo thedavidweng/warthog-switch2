@@ -738,11 +738,16 @@ int main(void) {
                     if name:
                         self.assertNotIn(name, seen, f"Duplicate widget {name} in {target_name}/{rel}")
                         seen.add(name)
+                        leaf = name.rsplit("/", 1)[-1]
+                        if leaf.startswith("view_"):
+                            self.assertLessEqual(len(leaf), 31, f"View mark truncated by tag_string: {leaf}")
 
         controls_xml = "\n".join(switch2_files[switch_menus.CONTROLS])
         for token in (
             "GYRO",
             "JOY-CON MOUSE",
+            "view_gamepad_buttons_gyro_nm",
+            "view_nm",
             "input.gyro_zoom_sensitivity",
             "input.joycon_mouse",
             "input.joycon_mouse_sensitivity",

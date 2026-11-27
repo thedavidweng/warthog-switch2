@@ -108,6 +108,8 @@ GYRO_ROWS = [
 SWITCH2_GYRO_ROWS = GYRO_ROWS + [
     ("ZOOM SENSITIVITY:", "input.gyro_zoom_sensitivity", ZOOM_SENSITIVITIES,
      "Gyroscope sensitivity multiplier while zoomed in.", None),
+    ("RECENTER BUTTON:", "input.gyro_recenter", [("OFF", "false"), ("D-PAD DOWN", "true")],
+     "Tap to level the view. Hold to pause gyro\naiming while you reposition the controller.", None),
 ]
 JOYCON_MOUSE_ROWS = [
     ("JOY-CON MOUSE:", "input.joycon_mouse",
@@ -209,7 +211,7 @@ def controls_rows_with_gyro(original, target="switch"):
         base = f"{port_settings.PE}/{port_settings.CONTROLS_SCREEN}"
         rows, extra = original()
         first_label = len(port_settings.MOUSE_ROWS) + len(port_settings.GAMEPAD_ROWS)
-        page_mark = "view_gamepad_buttons_gyro_nmouse" if target == "switch2" else "view_gamepad_buttons_gyro"
+        page_mark = "view_gamepad_buttons_gyro_nm" if target == "switch2" else "view_gamepad_buttons_gyro"
         rows = [(row.replace("view_gamepad_buttons", page_mark), platform, place)
                 for row, platform, place in rows]
         extra = [line.replace("view_gamepad_buttons", page_mark) for line in extra]
@@ -224,8 +226,8 @@ def controls_rows_with_gyro(original, target="switch"):
             label_idx += 1
         all_added_rows = list(gyro_rows)
         if target == "switch2":
-            rows.append((f"{base}/view_nmouse", None, 0))
-            added += port_settings._mark(base, "nmouse")
+            rows.append((f"{base}/view_nm", None, 0))
+            added += port_settings._mark(base, "nm")
             for place, row in enumerate(JOYCON_MOUSE_ROWS, 2):
                 key = port_settings._row_key(row)
                 rows.append((f"{base}/op_{key}", None, place))
