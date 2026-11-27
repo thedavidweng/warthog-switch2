@@ -317,6 +317,8 @@ class ToolchainPinTest(unittest.TestCase):
             version = self.record["dependencies"][pin]["release"]
             self.assertIn(f"${{OUNCE_REPO_URL}}/{package}-{version}-1-any.pkg.tar.zst", self.dockerfile)
         self.assertIn("RemoteFileSigLevel = Required", self.dockerfile)
+        self.assertLess(self.dockerfile.index("rm /etc/apt/sources.list.d/devkitpro.list"),
+                        self.dockerfile.index("apt-get update"))
         self.assertNotRegex(self.dockerfile, r"\bdkp-pacman\s+-S[a-z]*y")
         for header in ("drako3d.h", "libdrako3d.a", "uam2rt.h", "libuam2rt.a"):
             with self.subTest(header=header):

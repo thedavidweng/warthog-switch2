@@ -6,6 +6,7 @@ ARG OUNCE_REPO_URL=https://pkg.ouncebrew.org
 ARG OUNCE_GPG_SHA256=ada63e4b1d465b0e5768fcdab9042e760ef5c9d25e82c96df592ed2c37a753a3
 
 RUN set -eux; \
+    rm /etc/apt/sources.list.d/devkitpro.list; \
     apt-get update -qq; \
     apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg zstd bzip2 ccache; \
     curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg; \
