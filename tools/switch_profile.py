@@ -282,8 +282,9 @@ def report(args, profiles):
           f"{f', {dropped} stacks dropped (table full)' if dropped else ''}")
     for slot in sorted(threads):
         thread = threads[slot]
+        failed = thread["failed"]
         print(f"  thread {slot} ({thread['kind']}): {thread['samples']} samples"
-              f"{f', {thread['failed']} failed' if thread['failed'] else ''}")
+              f"{f', {failed} failed' if failed else ''}")
     print(f"selected ({args.thread}): {total} samples\n")
     if not total:
         return 0

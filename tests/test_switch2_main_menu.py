@@ -2,14 +2,17 @@
 
 import subprocess
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from switch2_toolchain import available as switch2_toolchain_available
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class MainMenuLinkTest(unittest.TestCase):
+    @unittest.skipUnless(switch2_toolchain_available(), "Switch 2 toolchain image unavailable")
     def test_main_menu_link_and_audit(self):
         build = ROOT / "scripts/switch2/build.sh"
         subprocess.run([str(build), "configure"], cwd=ROOT, check=True, capture_output=True)
@@ -75,6 +78,7 @@ class SharedRendererTest(unittest.TestCase):
         self.assertIn("DkInvalidateFlags_Descriptors", source)
         self.assertIn("VI2 swapchain images cannot use hardware compression", source)
 
+    @unittest.skipUnless(switch2_toolchain_available(), "Switch 2 toolchain image unavailable")
     def test_uam2_compiles_probe_shaders(self):
         probe = ROOT / "port/switch2/probe"
         with tempfile.TemporaryDirectory(dir=ROOT) as tmp:
@@ -123,10 +127,10 @@ int main(void) {
             subprocess.run([str(executable)], check=True)
 
 class Switch2VideoSwapWithoutOpenGLTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "darwin", "The GL stand-in harness uses Mach-O dynamic lookup")
     def test_standin_gl_context_swap_does_not_call_unloaded_gl_pointers(self):
         import os
         import runpy
-        import sys
 
         for entry in (str(ROOT), str(ROOT / "chupathingyce")):
             if entry not in sys.path:
@@ -274,8 +278,7 @@ int main(void) {
                 [
                     "clang", "-O0", "-g", "-std=gnu11",
                     "-ffunction-sections", "-fdata-sections",
-                    *(["-Wl,-dead_strip", "-Wl,-undefined,dynamic_lookup"]
-                      if sys.platform == "darwin" else ["-Wl,--gc-sections", "-Wl,--unresolved-symbols=ignore-in-object-files"]),
+                    "-Wl,-dead_strip", "-Wl,-undefined,dynamic_lookup",
                     "-D__SWITCH2__", "-DHALO_LINUX_PLATFORM_LAYER", "-DHALO_64BIT",
                     "-DHALO_SWITCH_CONSOLE", "-D_FORTIFY_SOURCE=0",
                     "-fsigned-char", "-fms-extensions", "-fshort-wchar", "-fcommon",

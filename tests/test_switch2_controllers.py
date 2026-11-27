@@ -81,7 +81,7 @@ int main(void) {
 """)
             subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
                             "-I", str(HOST), str(source),
-                            str(HOST / "switch2_input.c"), "-o", str(executable)], check=True)
+                            str(HOST / "switch2_input.c"), "-lm", "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 
     def test_gyro_settings_and_rumble_clamp(self):
@@ -115,7 +115,7 @@ int main(void) {
 """)
             subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
                             "-I", str(HOST), str(source),
-                            str(HOST / "switch2_input.c"), "-o", str(executable)], check=True)
+                            str(HOST / "switch2_input.c"), "-lm", "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)
 
     def test_gyro_samples(self):
@@ -188,5 +188,5 @@ int main(void) {
 """)
             subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
                             "-I", str(HOST), str(source),
-                            str(HOST / "switch2_input.c"), "-o", str(executable)], check=True)
+                            str(HOST / "switch2_input.c"), "-lm", "-o", str(executable)], check=True)
             subprocess.run([str(executable)], check=True)

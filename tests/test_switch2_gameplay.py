@@ -9,12 +9,14 @@ import unittest
 from unittest import mock
 
 from tools import switch_logs
+from switch2_toolchain import available as switch2_toolchain_available
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class DescriptorOrderingTest(unittest.TestCase):
+    @unittest.skipUnless(switch2_toolchain_available(), "Switch 2 toolchain image unavailable")
     def test_nv2a_generators_compile_to_ampere_dksh(self):
         xdk = (ROOT / "chupathingyce/port/include/xdk/xdk_pdb.h").read_text()
         # Each enum has its own namespace; their values come from the engine.

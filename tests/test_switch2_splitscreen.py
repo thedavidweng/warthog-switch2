@@ -25,7 +25,7 @@ class SplitScreenTest(unittest.TestCase):
                 ["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
                  "-I", str(HOST), str(source),
                  str(HOST / "switch2_splitscreen.c"),
-                 str(HOST / "switch2_input.c"), "-o", str(executable)],
+                 str(HOST / "switch2_input.c"), "-lm", "-o", str(executable)],
                 check=True,
             )
             subprocess.run([str(executable)], check=True)

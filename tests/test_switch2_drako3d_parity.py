@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from switch2_toolchain import available as switch2_toolchain_available
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,6 +75,7 @@ int main(void) {
         text = "\n".join(path.read_text(errors="ignore") for path in files if path.is_file())
         self.assertNotIn("glCreateShader", text)
         self.assertNotIn("vkCreateInstance", text)
+    @unittest.skipUnless(switch2_toolchain_available(), "Switch 2 toolchain image unavailable")
     def test_push_constants_ubo_sizes_are_aligned_to_dk_uniform_buf_alignment(self):
         import re
 
